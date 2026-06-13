@@ -1,0 +1,34 @@
+{
+  "name": "Simulation",
+  "uri": "https://example.com/schema/bpmn-des-simulation",
+  "prefix": "sim",
+  "xml": {
+    "tagAlias": "lowerCase"
+  },
+  "types": [
+    {
+      "name": "SimulationParameters",
+      "superClass": ["Element"],
+      "properties": [
+        { "name": "enabled", "type": "Boolean", "isAttr": true },
+        { "name": "durationDistribution", "type": "String", "isAttr": true },
+        { "name": "durationMin", "type": "String", "isAttr": true },
+        { "name": "durationMode", "type": "String", "isAttr": true },
+        { "name": "durationMean", "type": "String", "isAttr": true },
+        { "name": "durationMax", "type": "String", "isAttr": true },
+        { "name": "durationStdDev", "type": "String", "isAttr": true },
+        { "name": "arrivalIntervalMean", "type": "String", "isAttr": true },
+        { "name": "successProbability", "type": "String", "isAttr": true },
+        { "name": "errorProbability", "type": "String", "isAttr": true },
+        { "name": "retryProbability", "type": "String", "isAttr": true },
+        { "name": "maxRetries", "type": "String", "isAttr": true },
+        { "name": "retryDelay", "type": "String", "isAttr": true },
+        { "name": "resourcePool", "type": "String", "isAttr": true },
+        { "name": "resourceCapacity", "type": "String", "isAttr": true },
+        { "name": "probability", "type": "String", "isAttr": true },
+        { "name": "outputKey", "type": "String", "isAttr": true },
+        { "name": "outputValues", "type": "String", "isAttr": true }
+      ]
+    }
+  ]
+}
