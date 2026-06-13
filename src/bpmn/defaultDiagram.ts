@@ -10,10 +10,10 @@ export const defaultDiagram = `<?xml version="1.0" encoding="UTF-8"?>
   <bpmn:process id="Process_Order_Fulfillment" name="Order Fulfillment DES Demo" isExecutable="false">
     <bpmn:extensionElements>
       <sim:resourceCatalog>
-        <sim:resource id="Clerks" name="Clerks" capacity="2" weekdays="1,2,3,4,5" hourRanges="8-17" calendar="Mo-Fr 08:00-17:00" />
-        <sim:resource id="Warehouse" name="Warehouse Team" capacity="3" weekdays="1,2,3,4,5" hourRanges="6-20" calendar="Mo-Fr 06:00-20:00" />
-        <sim:resource id="Procurement" name="Procurement" capacity="1" weekdays="1,2,3,4,5" hourRanges="9-16" calendar="Mo-Fr 09:00-16:00" />
-        <sim:resource id="Shipping" name="Shipping Desk" capacity="2" weekdays="1,2,3,4,5" hourRanges="7-18" calendar="Mo-Fr 07:00-18:00" />
+        <sim:resource id="Clerks" name="Clerks" capacity="2" weekdays="1,2,3,4,5" hourRanges="8-17" />
+        <sim:resource id="Warehouse" name="Warehouse Team" capacity="3" weekdays="1,2,3,4,5" hourRanges="6-20" />
+        <sim:resource id="Procurement" name="Procurement" capacity="1" weekdays="1,2,3,4,5" hourRanges="9-16" />
+        <sim:resource id="Shipping" name="Shipping Desk" capacity="2" weekdays="1,2,3,4,5" hourRanges="7-18" />
       </sim:resourceCatalog>
     </bpmn:extensionElements>
     <bpmn:startEvent id="StartEvent_Order" name="Order received">
@@ -58,10 +58,6 @@ export const defaultDiagram = `<?xml version="1.0" encoding="UTF-8"?>
           <sim:failure probability="0.03" retryCount="2">
             <sim:retryDelay type="fixed" mean="2" />
           </sim:failure>
-          <sim:serviceOutput distribution="categorical">
-            <sim:possibleOutput value="standard" probability="0.75" />
-            <sim:possibleOutput value="express" probability="0.25" />
-          </sim:serviceOutput>
           <sim:serviceError probability="0.02">
             <sim:possibleError errorCode="PICKING_ERROR" probability="0.6" />
             <sim:possibleError errorCode="PACKING_ERROR" probability="0.4" />

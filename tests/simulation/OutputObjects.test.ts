@@ -1,26 +1,20 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  parseOutputObjectText,
+  parseOutputChoices,
   sampleOutputObject,
-  serializeOutputObjectFields
+  serializeOutputChoices
 } from '../../src/simulation/OutputObjects';
 import { SeededRandom } from '../../src/simulation/RandomDistributions';
 
-test('OutputObjects parses flat field syntax and serializes it again', () => {
-  const fields = parseOutputObjectText(
-    'priority:int:randomChoice:1:0.2|2:0.8; amount:float:normal:mean=10,stddev=2,min=0; code:string:random:length=6'
-  );
+test('OutputObjects parses and serializes flat choice lists', () => {
+  const choices = parseOutputChoices('1:0.2|2:0.8');
 
-  assert.equal(fields?.length, 3);
-  assert.equal(fields?.[0].key, 'priority');
-  assert.equal(fields?.[0].type, 'int');
-  assert.equal(fields?.[0].generator, 'randomChoice');
-  assert.deepEqual(fields?.[0].choices, [
+  assert.deepEqual(choices, [
     { value: '1', probability: 0.2 },
     { value: '2', probability: 0.8 }
   ]);
-  assert.match(serializeOutputObjectFields(fields), /amount:float:normal/);
+  assert.equal(serializeOutputChoices(choices), '1:0.2|2:0.8');
 });
 
 test('OutputObjects samples typed output values deterministically', () => {

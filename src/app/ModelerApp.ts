@@ -319,8 +319,7 @@ export class ModelerApp {
       name: `Resource ${nextIndex}`,
       capacity: 1,
       weekdays: [...DEFAULT_WEEKDAYS],
-      hourRanges: [...DEFAULT_HOUR_RANGES],
-      calendar: 'Mo-Fr 08:00-17:00'
+      hourRanges: [...DEFAULT_HOUR_RANGES]
     });
 
     this.persistResources(resources);
@@ -586,14 +585,18 @@ function createShellMarkup(): string {
               <strong id="metric-p90-cycle">-</strong>
             </article>
           </div>
-          <section class="panel-section">
-            <div class="section-title">
-              <h2>Resources</h2>
-              <button id="add-resource" class="icon-button compact-button" title="Ressource hinzufuegen" aria-label="Ressource hinzufuegen">
-                <i data-lucide="plus"></i>
-              </button>
-            </div>
-            <div id="resource-list" class="resource-list"></div>
+          <section class="panel-section collapsible-section">
+            <details open>
+              <summary class="section-title">
+                <h2>Resources</h2>
+              </summary>
+              <div class="section-actions">
+                <button id="add-resource" class="icon-button compact-button" title="Ressource hinzufuegen" aria-label="Ressource hinzufuegen">
+                  <i data-lucide="plus"></i>
+                </button>
+              </div>
+              <div id="resource-list" class="resource-list"></div>
+            </details>
           </section>
           <section class="panel-section">
             <div class="section-title">

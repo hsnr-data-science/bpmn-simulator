@@ -20,8 +20,7 @@ test('BpmnGraphBuilder resolves task resource references from the global resourc
                   name: 'Clerk Team',
                   capacity: '2',
                   weekdays: '1,2,3,4,5',
-                  hourRanges: '8-17',
-                  calendar: 'Mo-Fr 08:00-17:00'
+                  hourRanges: '8-17'
                 }
               ]
             }
@@ -80,5 +79,4 @@ test('BpmnGraphBuilder resolves task resource references from the global resourc
   assert.equal(task?.params.resource?.capacity, 2);
   assert.deepEqual(task?.params.resource?.weekdays, [1, 2, 3, 4, 5]);
   assert.deepEqual(task?.params.resource?.hourRanges, [{ start: 8, end: 17 }]);
-  assert.equal(task?.params.resource?.calendar, 'Mo-Fr 08:00-17:00');
 });

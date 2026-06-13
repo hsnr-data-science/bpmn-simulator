@@ -501,13 +501,6 @@ export class DesEngine {
 
   private captureOutput(caseId: number, node: SimNode): void {
     const outputObject = sampleOutputObject(node.params.outputObject, this.random);
-    const serviceOutput = node.kind === 'serviceTask' && node.params.output?.distribution !== 'none'
-      ? pickWeighted(node.params.output?.possibleOutputs, this.random)?.value
-      : undefined;
-
-    if (serviceOutput !== undefined) {
-      outputObject.serviceOutput = serviceOutput;
-    }
 
     if (Object.keys(outputObject).length) {
       this.tokens.setOutputObject(caseId, node.id, outputObject);

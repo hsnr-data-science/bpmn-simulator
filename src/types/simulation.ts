@@ -4,8 +4,6 @@ export type ArrivalDistributionType = 'fixedInterval' | 'exponentialInterarrival
 
 export type RetryDelayDistributionType = DurationDistributionType;
 
-export type OutputDistributionType = 'categorical' | 'none';
-
 export type OutputValueType = 'int' | 'float' | 'string';
 
 export type NumericOutputGeneratorType =
@@ -55,7 +53,6 @@ export type SimulationResource = {
   id: string;
   name: string;
   capacity?: number;
-  calendar?: string;
   weekdays?: Weekday[];
   hourRanges?: HourRange[];
 };
@@ -64,7 +61,6 @@ export type ResourceConfig = {
   resourceId?: string;
   resourceName?: string;
   capacity?: number;
-  calendar?: string;
   weekdays?: Weekday[];
   hourRanges?: HourRange[];
 };
@@ -73,11 +69,6 @@ export type FailureConfig = {
   probability?: number;
   retryCount?: number;
   retryDelay?: RetryDelayConfig;
-};
-
-export type PossibleOutput = {
-  value: string;
-  probability?: number;
 };
 
 export type OutputChoice = {
@@ -102,11 +93,6 @@ export type OutputFieldConfig = {
 
 export type OutputObjectConfig = {
   fields?: OutputFieldConfig[];
-};
-
-export type OutputConfig = {
-  distribution?: OutputDistributionType;
-  possibleOutputs?: PossibleOutput[];
 };
 
 export type PossibleError = {
@@ -136,7 +122,6 @@ export type TaskSimulationConfig = {
   duration?: DurationConfig;
   resource?: ResourceConfig;
   failure?: FailureConfig;
-  output?: OutputConfig;
   outputObject?: OutputObjectConfig;
   error?: ErrorConfig;
 };

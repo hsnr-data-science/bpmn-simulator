@@ -1,14 +1,11 @@
 import type { BpmnBusinessObject, BpmnElement, BpmnFactory, Modeling } from '../types/bpmn';
-import type { SimulationResource } from '../types/simulation';
+import type { DurationConfig, OutputFieldConfig, SimulationResource } from '../types/simulation';
 import {
   normalizeResourceSchedule,
   serializeHourRanges,
   serializeWeekdays
 } from '../simulation/ResourceCalendar';
-import {
-  parseOutputObjectText,
-  serializeOutputChoices
-} from '../simulation/OutputObjects';
+import { serializeOutputChoices } from '../simulation/OutputObjects';
 import {
   parseWeightedText,
   RESOURCE_CATALOG_TYPE,
@@ -25,7 +22,6 @@ const PATH_TYPE_MAP: Record<string, string> = {
   failure: 'sim:Failure',
   outputObject: 'sim:OutputObject',
   retryDelay: 'sim:RetryDelay',
-  serviceOutput: 'sim:ServiceOutput',
   serviceError: 'sim:ServiceError',
   arrival: 'sim:Arrival',
   branch: 'sim:Branch'
@@ -73,11 +69,66 @@ export function updateResourceCatalog(
       name: resource.name,
       capacity: resource.capacity === undefined ? undefined : String(resource.capacity),
       weekdays: serializeWeekdays(resource.weekdays),
-      hourRanges: serializeHourRanges(resource.hourRanges),
-      calendar: resource.calendar
+      hourRanges: serializeHourRanges(resource.hourRanges)
     }));
 
   modeling.updateModdleProperties(element, process, {
+    extensionElements
+  });
+}
+
+export function updateDurationConfig(
+  element: BpmnElement,
+  duration: DurationConfig,
+  bpmnFactory: BpmnFactory,
+  modeling: Modeling
+): void {
+  const businessObject = element.businessObject;
+
+  if (!businessObject) {
+    return;
+  }
+
+  const extensionElements = ensureExtensionElements(businessObject, bpmnFactory);
+  const config = ensureConfig(extensionElements, 'task', bpmnFactory);
+  const durationElement = ensureChild(config, 'duration', bpmnFactory);
+
+  for (const attribute of ['type', 'mean', 'stddev', 'min', 'max', 'mode', 'lambda']) {
+    delete durationElement[attribute];
+  }
+
+  const normalized = normalizeDuration(duration);
+
+  for (const [attribute, value] of Object.entries(normalized)) {
+    if (value !== undefined) {
+      durationElement[attribute] = String(value);
+    }
+  }
+
+  modeling.updateModdleProperties(element, businessObject, {
+    extensionElements
+  });
+}
+
+export function updateOutputObjectFields(
+  element: BpmnElement,
+  fields: OutputFieldConfig[],
+  bpmnFactory: BpmnFactory,
+  modeling: Modeling
+): void {
+  const businessObject = element.businessObject;
+
+  if (!businessObject) {
+    return;
+  }
+
+  const extensionElements = ensureExtensionElements(businessObject, bpmnFactory);
+  const config = ensureConfig(extensionElements, 'task', bpmnFactory);
+  const outputObject = ensureChild(config, 'outputObject', bpmnFactory);
+
+  outputObject.fields = createOutputFieldElementsFromFields(fields, bpmnFactory);
+
+  modeling.updateModdleProperties(element, businessObject, {
     extensionElements
   });
 }
@@ -149,18 +200,6 @@ function setConfigPath(
     return;
   }
 
-  if (path[0] === 'output' && path[1] === 'possibleOutputs') {
-    const output = ensureChild(config, 'serviceOutput', bpmnFactory);
-    output.possibleOutputs = createWeightedElements(value as string | undefined, 'sim:PossibleOutput', 'value', bpmnFactory);
-    return;
-  }
-
-  if (path[0] === 'outputObject' && path[1] === 'fields') {
-    const outputObject = ensureChild(config, 'outputObject', bpmnFactory);
-    outputObject.fields = createOutputFieldElements(value as string | undefined, bpmnFactory);
-    return;
-  }
-
   if (path[0] === 'error' && path[1] === 'possibleErrors') {
     const error = ensureChild(config, 'serviceError', bpmnFactory);
     error.possibleErrors = createWeightedElements(value as string | undefined, 'sim:PossibleError', 'errorCode', bpmnFactory);
@@ -181,16 +220,19 @@ function setConfigPath(
 
   if (path[0] === 'resource' && path[1] === 'resourceId') {
     delete target.capacity;
-    delete target.calendar;
     delete target.name;
+    delete target.weekdays;
+    delete target.hourRanges;
   }
 }
 
-function createOutputFieldElements(
-  value: string | undefined,
+function createOutputFieldElementsFromFields(
+  fields: OutputFieldConfig[],
   bpmnFactory: BpmnFactory
 ): BpmnBusinessObject[] {
-  return (parseOutputObjectText(value) ?? []).map((field) => bpmnFactory.create('sim:OutputField', {
+  return fields.map(normalizeOutputField)
+    .filter((field): field is OutputFieldConfig => Boolean(field))
+    .map((field) => bpmnFactory.create('sim:OutputField', {
     key: field.key,
     type: field.type,
     generator: field.generator,
@@ -244,10 +286,6 @@ function normalizePath(path: string[]): string[] {
     return ['resource', 'id'];
   }
 
-  if (path[0] === 'output') {
-    return ['serviceOutput', ...path.slice(1)];
-  }
-
   if (path[0] === 'error') {
     return ['serviceError', ...path.slice(1)];
   }
@@ -290,8 +328,89 @@ function normalizeResource(resource: SimulationResource): SimulationResource | u
     id,
     name,
     capacity: capacity === undefined || capacity <= 0 ? undefined : Math.floor(capacity),
-    calendar: schedule.calendar,
     weekdays: schedule.weekdays,
     hourRanges: schedule.hourRanges
   };
+}
+
+function normalizeDuration(duration: DurationConfig): DurationConfig {
+  const type = ['fixed', 'uniform', 'normal', 'exponential', 'triangular'].includes(duration.type ?? '')
+    ? duration.type
+    : 'fixed';
+
+  if (type === 'fixed') {
+    return {
+      type,
+      mean: duration.mean ?? 0
+    };
+  }
+
+  if (type === 'uniform') {
+    return {
+      type,
+      min: duration.min ?? 0,
+      max: duration.max ?? 10
+    };
+  }
+
+  if (type === 'normal') {
+    return {
+      type,
+      mean: duration.mean ?? 1,
+      stddev: duration.stddev ?? 1,
+      min: duration.min,
+      max: duration.max
+    };
+  }
+
+  if (type === 'exponential') {
+    return {
+      type,
+      mean: duration.mean ?? 1,
+      lambda: duration.lambda
+    };
+  }
+
+  return {
+    type,
+    min: duration.min ?? 0,
+    mode: duration.mode ?? 5,
+    max: duration.max ?? 10
+  };
+}
+
+function normalizeOutputField(field: OutputFieldConfig): OutputFieldConfig | undefined {
+  const key = field.key.trim();
+
+  if (!key) {
+    return undefined;
+  }
+
+  const type = field.type;
+  const generator = normalizeOutputGenerator(type, field.generator);
+
+  return {
+    ...field,
+    key,
+    type,
+    generator,
+    value: field.value === '' ? undefined : field.value,
+    choices: field.choices?.filter((choice) => choice.value.trim()).map((choice) => ({
+      value: choice.value.trim(),
+      probability: choice.probability
+    }))
+  };
+}
+
+function normalizeOutputGenerator(
+  type: OutputFieldConfig['type'],
+  generator: OutputFieldConfig['generator']
+): OutputFieldConfig['generator'] {
+  if (type === 'string') {
+    return ['random', 'categorical', 'fixed'].includes(generator) ? generator : 'random';
+  }
+
+  return ['fixed', 'randomChoice', 'uniform', 'normal', 'exponential', 'triangular'].includes(generator)
+    ? generator
+    : 'fixed';
 }

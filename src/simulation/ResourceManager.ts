@@ -17,7 +17,7 @@ export type ResourceStart = {
 type ResourceState = {
   id: string;
   capacity: number;
-  calendar?: ResourceConfig;
+  schedule?: ResourceConfig;
   busy: number;
   queue: QueuedTask[];
 };
@@ -32,7 +32,7 @@ export class ResourceManager {
       return { started: true };
     }
 
-    const availableAt = nextResourceAvailability(resource.calendar, time);
+    const availableAt = nextResourceAvailability(resource.schedule, time);
 
     if (availableAt > time) {
       return {
@@ -110,7 +110,7 @@ export class ResourceManager {
     const resource = {
       id: resourceId,
       capacity,
-      calendar: node.params.resource,
+      schedule: node.params.resource,
       busy: 0,
       queue: []
     };

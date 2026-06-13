@@ -13,7 +13,7 @@ import {
 import type { ResourceConfig } from '../../src/types/simulation';
 
 test('ResourceCalendar parses weekdays and hourly ranges', () => {
-  assert.deepEqual(parseWeekdays('Mo-Fr,So'), [1, 2, 3, 4, 5, 7]);
+  assert.deepEqual(parseWeekdays('1-5,7'), [1, 2, 3, 4, 5, 7]);
   assert.deepEqual(parseHourRanges('08:00-12:00, 13-17'), [
     { start: 8, end: 12 },
     { start: 13, end: 17 }

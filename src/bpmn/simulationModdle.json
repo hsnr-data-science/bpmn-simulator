@@ -15,7 +15,6 @@
         { "name": "resource", "type": "Resource" },
         { "name": "failure", "type": "Failure" },
         { "name": "outputObject", "type": "OutputObject" },
-        { "name": "serviceOutput", "type": "ServiceOutput" },
         { "name": "serviceError", "type": "ServiceError" }
       ]
     },
@@ -40,8 +39,7 @@
         { "name": "name", "type": "String", "isAttr": true },
         { "name": "capacity", "type": "String", "isAttr": true },
         { "name": "weekdays", "type": "String", "isAttr": true },
-        { "name": "hourRanges", "type": "String", "isAttr": true },
-        { "name": "calendar", "type": "String", "isAttr": true }
+        { "name": "hourRanges", "type": "String", "isAttr": true }
       ]
     },
     {
@@ -96,22 +94,6 @@
         { "name": "mode", "type": "String", "isAttr": true },
         { "name": "lambda", "type": "String", "isAttr": true },
         { "name": "length", "type": "String", "isAttr": true }
-      ]
-    },
-    {
-      "name": "ServiceOutput",
-      "superClass": ["Element"],
-      "properties": [
-        { "name": "distribution", "type": "String", "isAttr": true },
-        { "name": "possibleOutputs", "type": "PossibleOutput", "isMany": true }
-      ]
-    },
-    {
-      "name": "PossibleOutput",
-      "superClass": ["Element"],
-      "properties": [
-        { "name": "value", "type": "String", "isAttr": true },
-        { "name": "probability", "type": "String", "isAttr": true }
       ]
     },
     {

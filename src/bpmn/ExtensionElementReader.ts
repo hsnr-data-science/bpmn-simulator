@@ -5,11 +5,9 @@ import type {
   ElementSimulationConfig,
   ErrorConfig,
   FailureConfig,
-  OutputConfig,
   OutputFieldConfig,
   OutputObjectConfig,
   PossibleError,
-  PossibleOutput,
   ResourceConfig,
   SequenceFlowSimulationConfig,
   SimulationResource,
@@ -19,20 +17,15 @@ import type {
 import {
   normalizeResourceSchedule,
   parseHourRanges,
-  parseLegacyCalendar,
   parseWeekdays
 } from '../simulation/ResourceCalendar';
-import {
-  parseOutputChoices,
-  serializeOutputObjectFields
-} from '../simulation/OutputObjects';
+import { parseOutputChoices } from '../simulation/OutputObjects';
 
 export const SIM_NS_URI = 'https://hsnr.de/data-science/bpmn/simulation';
 export const TASK_CONFIG_TYPE = 'sim:TaskConfig';
 export const START_EVENT_CONFIG_TYPE = 'sim:StartEventConfig';
 export const SEQUENCE_FLOW_CONFIG_TYPE = 'sim:SequenceFlowConfig';
 export const RESOURCE_CATALOG_TYPE = 'sim:ResourceCatalog';
-export const LEGACY_CONFIG_TYPE = 'sim:SimulationParameters';
 
 export function readSimulationConfig(element?: BpmnBusinessObject): ElementSimulationConfig {
   if (!element) {
@@ -54,7 +47,7 @@ export function readTaskConfig(element?: BpmnBusinessObject): TaskSimulationConf
   const config = findExtension(element, TASK_CONFIG_TYPE);
 
   if (!config) {
-    return readLegacyConfig(element);
+    return {};
   }
 
   return {
@@ -63,7 +56,6 @@ export function readTaskConfig(element?: BpmnBusinessObject): TaskSimulationConf
     resource: readResource(config.resource as BpmnBusinessObject | undefined),
     failure: readFailure(config.failure as BpmnBusinessObject | undefined),
     outputObject: readOutputObject(config.outputObject as BpmnBusinessObject | undefined),
-    output: readOutput(config.serviceOutput as BpmnBusinessObject | undefined),
     error: readError(config.serviceError as BpmnBusinessObject | undefined)
   };
 }
@@ -72,7 +64,7 @@ export function readStartEventConfig(element?: BpmnBusinessObject): StartEventSi
   const config = findExtension(element, START_EVENT_CONFIG_TYPE);
 
   if (!config) {
-    return readLegacyConfig(element);
+    return {};
   }
 
   return {
@@ -85,7 +77,7 @@ export function readSequenceFlowConfig(element?: BpmnBusinessObject): SequenceFl
   const config = findExtension(element, SEQUENCE_FLOW_CONFIG_TYPE);
 
   if (!config) {
-    return readLegacyConfig(element);
+    return {};
   }
 
   return {
@@ -103,7 +95,7 @@ export function readRawSimulationValue(
   const value = readPath(readSimulationConfig(element), path);
 
   if (Array.isArray(value)) {
-    return path[0] === 'outputObject' ? serializeOutputObjectFields(value as OutputFieldConfig[]) : serializeWeightedList(value);
+    return serializeWeightedList(value);
   }
 
   if (typeof value === 'number') {
@@ -162,7 +154,6 @@ function readResource(element?: BpmnBusinessObject): ResourceConfig | undefined 
     resourceId: asString(element.id),
     resourceName: asString(element.name),
     capacity: asInteger(element.capacity),
-    calendar: asString(element.calendar),
     weekdays: parseWeekdays(asString(element.weekdays)),
     hourRanges: parseHourRanges(asString(element.hourRanges))
   };
@@ -176,19 +167,16 @@ function readCatalogResource(element?: BpmnBusinessObject): SimulationResource |
   }
 
   const schedule = normalizeResourceSchedule({
-    calendar: asString(element?.calendar),
     weekdays: parseWeekdays(asString(element?.weekdays)),
     hourRanges: parseHourRanges(asString(element?.hourRanges))
   });
-  const legacy = parseLegacyCalendar(asString(element?.calendar));
 
   return {
     id,
     name: asString(element?.name) ?? id,
     capacity: asInteger(element?.capacity),
-    calendar: schedule.calendar,
-    weekdays: schedule.weekdays ?? legacy.weekdays,
-    hourRanges: schedule.hourRanges ?? legacy.hourRanges
+    weekdays: schedule.weekdays,
+    hourRanges: schedule.hourRanges
   };
 }
 
@@ -201,20 +189,6 @@ function readFailure(element?: BpmnBusinessObject): FailureConfig | undefined {
     probability: asNumber(element.probability),
     retryCount: asInteger(element.retryCount),
     retryDelay: readDuration(element.retryDelay as BpmnBusinessObject | undefined)
-  };
-}
-
-function readOutput(element?: BpmnBusinessObject): OutputConfig | undefined {
-  if (!element) {
-    return undefined;
-  }
-
-  return {
-    distribution: asString(element.distribution) === 'none' ? 'none' : 'categorical',
-    possibleOutputs: readWeightedChildren<PossibleOutput>(
-      element.possibleOutputs as BpmnBusinessObject[] | undefined,
-      'value'
-    )
   };
 }
 
@@ -302,51 +276,6 @@ function readWeightedChildren<T extends { probability?: number }>(
       probability: asNumber(child.probability)
     }))
     .filter((entry) => entry[valueKey]) as T[];
-}
-
-function readLegacyConfig(element?: BpmnBusinessObject): ElementSimulationConfig {
-  const legacy = findExtension(element, LEGACY_CONFIG_TYPE);
-
-  if (!legacy) {
-    return {};
-  }
-
-  const duration: DurationConfig = {
-    type: normalizeDurationType(asString(legacy.durationDistribution)),
-    min: asNumber(legacy.durationMin),
-    mode: asNumber(legacy.durationMode),
-    mean: asNumber(legacy.durationMean),
-    max: asNumber(legacy.durationMax),
-    stddev: asNumber(legacy.durationStdDev)
-  };
-
-  return {
-    enabled: asBoolean(legacy.enabled),
-    duration,
-    arrival: {
-      type: legacy.arrivalIntervalMean ? 'exponentialInterarrival' : undefined,
-      mean: asNumber(legacy.arrivalIntervalMean)
-    },
-    branch: {
-      probability: asNumber(legacy.probability)
-    },
-    resource: {
-      resourceId: asString(legacy.resourcePool),
-      capacity: asInteger(legacy.resourceCapacity)
-    },
-    failure: {
-      probability: asNumber(legacy.errorProbability),
-      retryCount: asInteger(legacy.maxRetries),
-      retryDelay: {
-        type: 'fixed',
-        mean: asNumber(legacy.retryDelay)
-      }
-    },
-    output: {
-      distribution: legacy.outputValues ? 'categorical' : undefined,
-      possibleOutputs: parseWeightedText(asString(legacy.outputValues), 'value')
-    }
-  };
 }
 
 function normalizeOutputValueType(value: string | undefined): OutputFieldConfig['type'] | undefined {

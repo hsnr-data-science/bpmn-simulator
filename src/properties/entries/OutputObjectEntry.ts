@@ -1,11 +1,10 @@
 export function outputObjectEntries() {
   return [
     {
-      id: 'sim-output-object-fields',
-      label: 'Output Object Fields',
+      id: 'sim-output-object-list',
+      label: 'Output Objects',
       path: ['outputObject', 'fields'],
-      control: 'text'
+      control: 'outputObjectList'
     }
   ];
 }
-

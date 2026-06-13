@@ -201,6 +201,40 @@ select {
   margin-bottom: 8px;
 }
 
+.collapsible-section details {
+  display: grid;
+  gap: 8px;
+}
+
+.collapsible-section .section-title {
+  margin-bottom: 0;
+  cursor: pointer;
+  list-style: none;
+}
+
+.collapsible-section .section-title::-webkit-details-marker {
+  display: none;
+}
+
+.collapsible-section .section-title::after {
+  content: "";
+  width: 8px;
+  height: 8px;
+  border-right: 2px solid #6a7470;
+  border-bottom: 2px solid #6a7470;
+  transform: rotate(45deg);
+  transition: transform 120ms ease;
+}
+
+.collapsible-section details:not([open]) .section-title::after {
+  transform: rotate(-45deg);
+}
+
+.section-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
 .section-title h2 {
   margin: 0;
   font-size: 13px;
@@ -498,6 +532,179 @@ select {
   stroke: #6b5b95 !important;
   stroke-dasharray: 7 4 !important;
   stroke-width: 4px !important;
+}
+
+.sim-duration-editor,
+.sim-output-object-list {
+  display: grid;
+  gap: 8px;
+  padding: 4px 0;
+}
+
+.sim-field-row,
+.sim-output-item-title {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+}
+
+.sim-field-row span,
+.sim-output-item-title strong {
+  overflow: hidden;
+  color: #24312c;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sim-field-row select,
+.sim-duration-parameters input {
+  min-width: 0;
+  width: 100%;
+  height: 30px;
+  padding: 4px 7px;
+  border: 1px solid #c4ccc8;
+  border-radius: 6px;
+  color: #202329;
+  background: #ffffff;
+  font: inherit;
+  font-size: 12px;
+}
+
+.sim-duration-parameters {
+  display: grid;
+  gap: 7px;
+}
+
+.sim-duration-parameters label {
+  display: grid;
+  grid-template-columns: 80px minmax(0, 1fr);
+  align-items: center;
+  gap: 7px;
+}
+
+.sim-duration-parameters label span {
+  color: #68716d;
+  font-size: 11px;
+}
+
+.sim-collapsible-list {
+  border: 1px solid #d6ddda;
+  border-radius: 8px;
+  background: #f8faf9;
+}
+
+.sim-collapsible-summary {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 9px;
+  color: #24312c;
+  font-size: 12px;
+  cursor: pointer;
+  list-style: none;
+}
+
+.sim-collapsible-summary::-webkit-details-marker {
+  display: none;
+}
+
+.sim-collapsible-summary::after {
+  content: "";
+  width: 7px;
+  height: 7px;
+  border-right: 2px solid #6a7470;
+  border-bottom: 2px solid #6a7470;
+  transform: rotate(45deg);
+  transition: transform 120ms ease;
+}
+
+.sim-collapsible-list:not([open]) .sim-collapsible-summary::after {
+  transform: rotate(-45deg);
+}
+
+.sim-collapsible-summary small {
+  min-width: 22px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  color: #134d44;
+  background: #e5f2ef;
+  font-size: 11px;
+  text-align: center;
+}
+
+.sim-collapsible-body {
+  display: grid;
+  gap: 8px;
+  padding: 0 9px 9px;
+}
+
+.sim-output-object-items {
+  display: grid;
+  gap: 8px;
+}
+
+.sim-output-item {
+  display: grid;
+  gap: 7px;
+  padding: 9px;
+  border: 1px solid #d6ddda;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.sim-output-item label {
+  display: grid;
+  grid-template-columns: 80px minmax(0, 1fr);
+  align-items: center;
+  gap: 7px;
+}
+
+.sim-output-item label span {
+  color: #68716d;
+  font-size: 11px;
+}
+
+.sim-output-item input,
+.sim-output-item select {
+  min-width: 0;
+  width: 100%;
+  height: 30px;
+  padding: 4px 7px;
+  border: 1px solid #c4ccc8;
+  border-radius: 6px;
+  color: #202329;
+  background: #ffffff;
+  font: inherit;
+  font-size: 12px;
+}
+
+.sim-output-add,
+.sim-output-remove {
+  min-height: 28px;
+  padding: 3px 8px;
+  border: 1px solid #c4ccc8;
+  border-radius: 6px;
+  color: #23302b;
+  background: #ffffff;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.sim-output-remove {
+  color: #7a2c2a;
+}
+
+.sim-output-empty {
+  margin: 0;
+  padding: 8px;
+  border: 1px dashed #c4ccc8;
+  border-radius: 8px;
+  color: #68716d;
+  background: #fbfcfb;
+  font-size: 12px;
 }
 
 @media (max-width: 1100px) {

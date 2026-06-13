@@ -46,7 +46,7 @@ src/
     entries/
       DurationDistributionEntry.ts
       BranchProbabilityEntry.ts
-      ServiceTaskOutputEntry.ts
+      ServiceTaskErrorEntry.ts
       ResourceEntry.ts
   visualization/
     TokenOverlayManager.ts
@@ -70,8 +70,7 @@ Die Parameter werden im BPMN XML unter `bpmn:extensionElements` gespeichert:
         name="Clerk Team"
         capacity="2"
         weekdays="1,2,3,4,5"
-        hourRanges="8-17"
-        calendar="Mo-Fr 08:00-17:00" />
+        hourRanges="8-17" />
     </sim:resourceCatalog>
   </bpmn:extensionElements>
 </bpmn:process>
@@ -103,26 +102,21 @@ Die Parameter werden im BPMN XML unter `bpmn:extensionElements` gespeichert:
 
 Editierbar im Properties Panel sind:
 
-- Tasks: Dauerverteilung `fixed`, `uniform`, `normal`, `exponential`, `triangular`, Ressourcenauswahl per Dropdown, Fehlerwahrscheinlichkeit, Retry-Anzahl und Retry-Delay.
+- Tasks: dynamische Dauerverteilung `fixed`, `uniform`, `normal`, `exponential`, `triangular`; je nach Auswahl werden nur die passenden Parameterfelder angezeigt. Dazu kommen Ressourcenauswahl per Dropdown, Fehlerwahrscheinlichkeit, Retry-Anzahl und Retry-Delay.
 - User Tasks, Script Tasks, Receive Tasks und Service Tasks: einfache Output-Objekte als Key-Value-Liste.
-- Service Tasks: zusaetzlich stochastische Legacy-Outputs, Output-Verteilung, Fehlerwahrscheinlichkeit und mögliche Fehlercodes.
+- Service Tasks: zusaetzlich Fehlerwahrscheinlichkeit und mögliche Fehlercodes; stochastische Outputs werden ueber Output-Objects modelliert.
 - Sequence Flows: Branch-Wahrscheinlichkeit für XOR-Gateways ohne Bedingungen.
 - Start Events: Ankunftsverteilung, Intervall-/Mittelwert-/Schedule-Felder und Anzahl der Cases.
 
-Globale Ressourcen werden in einem eigenen Ressourcenbereich der Anwendung gepflegt. Jede Ressource besitzt ID, Name, Kapazität und Verfügbarkeitskalender/Arbeitszeiten. Tasks speichern nur die Resource-ID als Referenz; Kapazität und Kalender werden beim Aufbau des Simulationsmodells aus dem globalen Katalog aufgelöst.
+Globale Ressourcen werden in einem eigenen einklappbaren Ressourcenbereich der Anwendung gepflegt. Jede Ressource besitzt ID, Name, Kapazität und Verfügbarkeitskalender/Arbeitszeiten. Tasks speichern nur die Resource-ID als Referenz; Kapazität und Kalender werden beim Aufbau des Simulationsmodells aus dem globalen Katalog aufgelöst.
 
-Arbeitszeiten werden strukturiert gespeichert: `weekdays` nutzt `1=Montag` bis `7=Sonntag`, `hourRanges` nutzt stundenweise Bereiche von `0` bis `24`, z. B. `8-12,13-17`. Das lesbare `calendar`-Attribut bleibt als Zusammenfassung und Legacy-Fallback erhalten. In der Simulation gilt `t=0` als Montag 00:00; Ressourcen starten Tasks nur innerhalb ihrer Arbeitszeiten, und Bearbeitungszeit zählt als Arbeitszeit über Kalendergrenzen hinweg weiter.
+Arbeitszeiten werden ausschliesslich strukturiert gespeichert: `weekdays` nutzt `1=Montag` bis `7=Sonntag`, `hourRanges` nutzt stundenweise Bereiche von `0` bis `24`, z. B. `8-12,13-17`. Alte Freitext-Working-Hours bzw. `calendar`-Attribute werden nicht mehr geschrieben oder als Fallback ausgewertet. In der Simulation gilt `t=0` als Montag 00:00; Ressourcen starten Tasks nur innerhalb ihrer Arbeitszeiten, und Bearbeitungszeit zählt als Arbeitszeit über Kalendergrenzen hinweg weiter.
 
-Output-Objekte sind bewusst flach und enthalten keine verschachtelten JSON-Strukturen. Im Properties Panel werden sie als Semikolon- oder zeilengetrennte Liste gepflegt:
+Output-Objekte sind bewusst flach und enthalten keine verschachtelten JSON-Strukturen. Im Properties Panel werden sie als eigene einklappbare Liste gepflegt: Felder koennen hinzugefuegt oder entfernt werden, jedes Feld hat einen Namen, einen Typ und danach passende Generator-/Verteilungsparameter.
 
-```text
-priority:int:randomChoice:1:0.2|2:0.5|3:0.3;
-amount:float:normal:mean=10,stddev=2,min=0;
-status:string:categorical:ok:0.8|manual:0.2;
-trackingCode:string:random:length=10
-```
+Unterstuetzte Feldtypen sind `int`, `float` und `string`. Zahlen koennen `fixed`, `randomChoice`, `uniform`, `normal`, `exponential` oder `triangular` nutzen. Strings koennen `random`, `fixed` oder `categorical` nutzen. Die UI blendet je nach Typ und Generator nur die passenden Parameter ein, z. B. Min/Max fuer `uniform`, Mean/Stddev fuer `normal`, Wertelisten fuer `randomChoice` und Kategorien fuer `categorical`.
 
-Unterstuetzte Feldtypen sind `int`, `float` und `string`. Zahlen koennen `fixed`, `randomChoice`, `uniform`, `normal`, `exponential` oder `triangular` nutzen. Strings koennen `random`, `fixed` oder `categorical` nutzen. Die Konfiguration liegt als generisches `sim:outputObject` vor und kann spaeter auch an Event-Konfigurationen wiederverwendet werden.
+Die Konfiguration liegt als generisches `sim:outputObject` in den BPMN Extension Elements vor und kann spaeter auch an Event-Konfigurationen wiederverwendet werden.
 
 ## DES-Kern
 
@@ -202,4 +196,4 @@ Exporte sind als JSON, CSV und XES-ähnliches Event Log vorbereitet.
 
 ## Beispielmodell
 
-Das mitgelieferte BPMN-Beispiel enthält Start Event, zwei Tasks, XOR-Gateway mit Branch-Wahrscheinlichkeiten, Service Task mit Output-Verteilung und End Event. Es wird beim Start der Anwendung automatisch geladen und kann direkt im Modeler bearbeitet werden.
+Das mitgelieferte BPMN-Beispiel enthält Start Event, zwei Tasks, XOR-Gateway mit Branch-Wahrscheinlichkeiten, Service Task mit Output-Object und End Event. Es wird beim Start der Anwendung automatisch geladen und kann direkt im Modeler bearbeitet werden.

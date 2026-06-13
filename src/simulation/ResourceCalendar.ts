@@ -116,24 +116,6 @@ export function parseHourRanges(value: string | undefined): HourRange[] {
   return normalizeHourRanges(ranges);
 }
 
-export function parseLegacyCalendar(value: string | undefined): {
-  weekdays?: Weekday[];
-  hourRanges?: HourRange[];
-} {
-  if (!value?.trim()) {
-    return {};
-  }
-
-  const dayText = value.match(/[A-Za-zÄÖÜäöüß0-9,\-\s]+?(?=\s+\d{1,2}(?::\d{2})?\s*-|$)/)?.[0];
-  const weekdays = parseWeekdays(dayText);
-  const hourRanges = parseHourRanges(value);
-
-  return {
-    weekdays: weekdays.length ? weekdays : undefined,
-    hourRanges: hourRanges.length ? hourRanges : undefined
-  };
-}
-
 export function serializeWeekdays(value: Weekday[] | undefined): string | undefined {
   const days = normalizeWeekdays(value);
 
@@ -179,16 +161,15 @@ export function rangesToHours(ranges: HourRange[] | undefined): number[] {
 }
 
 export function normalizeResourceSchedule(
-  resource: Pick<SimulationResource, 'calendar' | 'weekdays' | 'hourRanges'>,
+  resource: Pick<SimulationResource, 'weekdays' | 'hourRanges'>,
   fallback: 'always' | 'businessHours' = 'always'
-): Pick<SimulationResource, 'calendar' | 'weekdays' | 'hourRanges'> {
-  const legacy = parseLegacyCalendar(resource.calendar);
+): Pick<SimulationResource, 'weekdays' | 'hourRanges'> {
   const weekdays = normalizeWeekdays(resource.weekdays).length
     ? normalizeWeekdays(resource.weekdays)
-    : legacy.weekdays;
+    : undefined;
   const hourRanges = normalizeHourRanges(resource.hourRanges).length
     ? normalizeHourRanges(resource.hourRanges)
-    : legacy.hourRanges;
+    : undefined;
   const fallbackWeekdays = fallback === 'businessHours' ? DEFAULT_WEEKDAYS : ALL_WEEKDAYS;
   const fallbackHours = fallback === 'businessHours' ? DEFAULT_HOUR_RANGES : [{ start: 0, end: 24 }];
   const normalizedWeekdays = weekdays?.length ? weekdays : fallbackWeekdays;
@@ -196,8 +177,7 @@ export function normalizeResourceSchedule(
 
   return {
     weekdays: normalizedWeekdays,
-    hourRanges: normalizedHourRanges,
-    calendar: formatResourceCalendar(normalizedWeekdays, normalizedHourRanges)
+    hourRanges: normalizedHourRanges
   };
 }
 
@@ -212,7 +192,7 @@ export function formatResourceCalendar(
 }
 
 export function nextResourceAvailability(
-  resource: Pick<ResourceConfig, 'weekdays' | 'hourRanges' | 'calendar'> | undefined,
+  resource: Pick<ResourceConfig, 'weekdays' | 'hourRanges'> | undefined,
   time: number
 ): number {
   if (!resource || !hasCalendar(resource)) {
@@ -250,7 +230,7 @@ export function nextResourceAvailability(
 export function addWorkingTime(
   startTime: number,
   duration: number,
-  resource: Pick<ResourceConfig, 'weekdays' | 'hourRanges' | 'calendar'> | undefined
+  resource: Pick<ResourceConfig, 'weekdays' | 'hourRanges'> | undefined
 ): number {
   if (!resource || !hasCalendar(resource) || duration <= 0) {
     return startTime + Math.max(0, duration);
@@ -280,7 +260,7 @@ export function addWorkingTime(
 }
 
 export function isResourceAvailable(
-  resource: Pick<ResourceConfig, 'weekdays' | 'hourRanges' | 'calendar'>,
+  resource: Pick<ResourceConfig, 'weekdays' | 'hourRanges'>,
   time: number
 ): boolean {
   const weekday = dayOfWeek(time);
@@ -290,16 +270,15 @@ export function isResourceAvailable(
     getEffectiveHourRanges(resource).some((range) => hour >= range.start && hour < range.end);
 }
 
-function hasCalendar(resource: Pick<ResourceConfig, 'weekdays' | 'hourRanges' | 'calendar'>): boolean {
+function hasCalendar(resource: Pick<ResourceConfig, 'weekdays' | 'hourRanges'>): boolean {
   return Boolean(
     normalizeWeekdays(resource.weekdays).length ||
-    normalizeHourRanges(resource.hourRanges).length ||
-    resource.calendar?.trim()
+    normalizeHourRanges(resource.hourRanges).length
   );
 }
 
 function currentAvailabilityEnd(
-  resource: Pick<ResourceConfig, 'weekdays' | 'hourRanges' | 'calendar'>,
+  resource: Pick<ResourceConfig, 'weekdays' | 'hourRanges'>,
   time: number
 ): number {
   const weekday = dayOfWeek(time);
@@ -315,7 +294,7 @@ function currentAvailabilityEnd(
 }
 
 function getEffectiveWeekdays(
-  resource: Pick<ResourceConfig, 'weekdays' | 'calendar'>
+  resource: Pick<ResourceConfig, 'weekdays'>
 ): Weekday[] {
   const weekdays = normalizeWeekdays(resource.weekdays);
 
@@ -323,11 +302,11 @@ function getEffectiveWeekdays(
     return weekdays;
   }
 
-  return parseLegacyCalendar(resource.calendar).weekdays ?? ALL_WEEKDAYS;
+  return ALL_WEEKDAYS;
 }
 
 function getEffectiveHourRanges(
-  resource: Pick<ResourceConfig, 'hourRanges' | 'calendar'>
+  resource: Pick<ResourceConfig, 'hourRanges'>
 ): HourRange[] {
   const ranges = normalizeHourRanges(resource.hourRanges);
 
@@ -335,7 +314,7 @@ function getEffectiveHourRanges(
     return ranges;
   }
 
-  return parseLegacyCalendar(resource.calendar).hourRanges ?? [{ start: 0, end: 24 }];
+  return [{ start: 0, end: 24 }];
 }
 
 function parseWeekdayToken(value: string | undefined): Weekday | undefined {

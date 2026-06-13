@@ -2,7 +2,12 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import type { BpmnBusinessObject, BpmnElement } from '../../src/types/bpmn';
 import { readResourceCatalog, readTaskConfig } from '../../src/bpmn/ExtensionElementReader';
-import { updateResourceCatalog, updateSimulationValue } from '../../src/bpmn/ExtensionElementWriter';
+import {
+  updateDurationConfig,
+  updateOutputObjectFields,
+  updateResourceCatalog,
+  updateSimulationValue
+} from '../../src/bpmn/ExtensionElementWriter';
 
 test('ExtensionElementWriter persists nested task duration and resource config', () => {
   const businessObject: BpmnBusinessObject = {
@@ -31,20 +36,32 @@ test('ExtensionElementWriter persists nested task duration and resource config',
     }
   };
 
-  updateSimulationValue(element, 'task', ['duration', 'type'], 'normal', bpmnFactory, modeling);
-  updateSimulationValue(element, 'task', ['duration', 'mean'], '10', bpmnFactory, modeling);
-  updateSimulationValue(element, 'task', ['duration', 'stddev'], '2', bpmnFactory, modeling);
+  updateDurationConfig(element, { type: 'normal', mean: 10, stddev: 2 }, bpmnFactory, modeling);
   updateSimulationValue(element, 'task', ['resource', 'resourceId'], 'clerk', bpmnFactory, modeling);
-  updateSimulationValue(element, 'task', ['resource', 'capacity'], '3', bpmnFactory, modeling);
-  updateSimulationValue(
+  updateOutputObjectFields(
     element,
-    'task',
-    ['outputObject', 'fields'],
-    'score:int:normal:mean=10,stddev=2,min=0; status:string:categorical:ok:0.8|manual:0.2',
+    [
+      {
+        key: 'score',
+        type: 'int',
+        generator: 'normal',
+        mean: 10,
+        stddev: 2,
+        min: 0
+      },
+      {
+        key: 'status',
+        type: 'string',
+        generator: 'categorical',
+        choices: [
+          { value: 'ok', probability: 0.8 },
+          { value: 'manual', probability: 0.2 }
+        ]
+      }
+    ],
     bpmnFactory,
     modeling
   );
-  updateSimulationValue(element, 'task', ['output', 'possibleOutputs'], 'ok:0.8, manual:0.2', bpmnFactory, modeling);
 
   const config = readTaskConfig(businessObject);
 
@@ -52,7 +69,6 @@ test('ExtensionElementWriter persists nested task duration and resource config',
   assert.equal(config.duration?.mean, 10);
   assert.equal(config.duration?.stddev, 2);
   assert.equal(config.resource?.resourceId, 'clerk');
-  assert.equal(config.resource?.capacity, 3);
   assert.deepEqual(config.outputObject?.fields, [
     {
       key: 'score',
@@ -86,10 +102,49 @@ test('ExtensionElementWriter persists nested task duration and resource config',
       length: undefined
     }
   ]);
-  assert.deepEqual(config.output?.possibleOutputs, [
-    { value: 'ok', probability: 0.8 },
-    { value: 'manual', probability: 0.2 }
-  ]);
+});
+
+test('ExtensionElementWriter replaces duration attributes when the distribution changes', () => {
+  const businessObject: BpmnBusinessObject = {
+    $type: 'bpmn:Task',
+    id: 'task'
+  };
+  const element: BpmnElement = {
+    id: 'task',
+    businessObject
+  };
+  const bpmnFactory = {
+    create(type: string, properties: Record<string, unknown> = {}) {
+      return {
+        $type: type,
+        ...properties
+      };
+    }
+  };
+  const modeling = {
+    updateModdleProperties(
+      _element: BpmnElement,
+      moddleElement: BpmnBusinessObject,
+      properties: Record<string, unknown>
+    ) {
+      Object.assign(moddleElement, properties);
+    }
+  };
+
+  updateDurationConfig(element, { type: 'normal', mean: 10, stddev: 2, min: 0 }, bpmnFactory, modeling);
+  updateDurationConfig(element, { type: 'uniform', min: 3, max: 8 }, bpmnFactory, modeling);
+
+  const duration = readTaskConfig(businessObject).duration;
+
+  assert.deepEqual(duration, {
+    type: 'uniform',
+    mean: undefined,
+    stddev: undefined,
+    min: 3,
+    max: 8,
+    lambda: undefined,
+    mode: undefined
+  });
 });
 
 test('ExtensionElementWriter persists the global resource catalog', () => {
@@ -128,8 +183,7 @@ test('ExtensionElementWriter persists the global resource catalog', () => {
         name: 'Clerk Team',
         capacity: 2,
         weekdays: [1, 2, 3, 4, 5],
-        hourRanges: [{ start: 8, end: 17 }],
-        calendar: 'Mo-Fr 08:00-17:00'
+        hourRanges: [{ start: 8, end: 17 }]
       }
     ],
     bpmnFactory,
@@ -142,8 +196,69 @@ test('ExtensionElementWriter persists the global resource catalog', () => {
       name: 'Clerk Team',
       capacity: 2,
       weekdays: [1, 2, 3, 4, 5],
-      hourRanges: [{ start: 8, end: 17 }],
-      calendar: 'Mo-Fr 08:00-17:00'
+      hourRanges: [{ start: 8, end: 17 }]
     }
+  ]);
+});
+
+test('ExtensionElementWriter persists output object fields from structured UI updates', () => {
+  const businessObject: BpmnBusinessObject = {
+    $type: 'bpmn:UserTask',
+    id: 'user'
+  };
+  const element: BpmnElement = {
+    id: 'user',
+    businessObject
+  };
+  const bpmnFactory = {
+    create(type: string, properties: Record<string, unknown> = {}) {
+      return {
+        $type: type,
+        ...properties
+      };
+    }
+  };
+  const modeling = {
+    updateModdleProperties(
+      _element: BpmnElement,
+      moddleElement: BpmnBusinessObject,
+      properties: Record<string, unknown>
+    ) {
+      Object.assign(moddleElement, properties);
+    }
+  };
+
+  updateOutputObjectFields(
+    element,
+    [
+      {
+        key: 'amount',
+        type: 'float',
+        generator: 'normal',
+        mean: 12,
+        stddev: 2,
+        min: 0
+      },
+      {
+        key: 'status',
+        type: 'string',
+        generator: 'categorical',
+        choices: [
+          { value: 'ok', probability: 0.9 },
+          { value: 'manual', probability: 0.1 }
+        ]
+      }
+    ],
+    bpmnFactory,
+    modeling
+  );
+
+  const config = readTaskConfig(businessObject);
+
+  assert.equal(config.outputObject?.fields?.[0].key, 'amount');
+  assert.equal(config.outputObject?.fields?.[0].mean, 12);
+  assert.deepEqual(config.outputObject?.fields?.[1].choices, [
+    { value: 'ok', probability: 0.9 },
+    { value: 'manual', probability: 0.1 }
   ]);
 });

@@ -132,7 +132,6 @@ function resolveResourceConfig(
       resourceId,
       resourceName: resource.name,
       capacity: resource.capacity ?? taskResource.capacity,
-      calendar: resource.calendar ?? taskResource.calendar,
       weekdays: resource.weekdays ?? taskResource.weekdays,
       hourRanges: resource.hourRanges ?? taskResource.hourRanges
     }
