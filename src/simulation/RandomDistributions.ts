@@ -1,4 +1,4 @@
-import type { SimulationParameters } from './types';
+import type { DurationConfig, PossibleError, PossibleOutput } from '../types/simulation';
 
 export class SeededRandom {
   private state: number;
@@ -16,40 +16,68 @@ export class SeededRandom {
 
     return ((value ^ (value >>> 14)) >>> 0) / 4294967296;
   }
-
-  pick<T>(values: T[]): T {
-    return values[Math.min(values.length - 1, Math.floor(this.next() * values.length))];
-  }
 }
 
-export function sampleDuration(params: Partial<SimulationParameters>, random: SeededRandom): number {
-  const distribution = params.durationDistribution ?? inferDistribution(params);
+export function sampleDuration(config: DurationConfig | undefined, random: SeededRandom): number {
+  const type = config?.type ?? inferDistribution(config);
 
-  switch (distribution) {
-    case 'constant':
-      return nonNegative(params.durationMean ?? params.durationMode ?? params.durationMin ?? 1);
+  switch (type) {
+    case 'fixed':
+      return nonNegative(config?.mean ?? config?.mode ?? config?.min ?? 1);
     case 'uniform':
-      return uniform(params.durationMin ?? 0, params.durationMax ?? params.durationMean ?? 1, random);
+      return uniform(config?.min ?? 0, config?.max ?? config?.mean ?? 1, random);
     case 'triangular':
       return triangular(
-        params.durationMin ?? 0,
-        params.durationMode ?? params.durationMean ?? 1,
-        params.durationMax ?? Math.max(params.durationMode ?? 1, params.durationMean ?? 1, 1),
+        config?.min ?? 0,
+        config?.mode ?? config?.mean ?? 1,
+        config?.max ?? Math.max(config?.mode ?? 1, config?.mean ?? 1, 1),
         random
       );
     case 'normal':
       return clippedNormal(
-        params.durationMean ?? params.durationMode ?? 1,
-        params.durationStdDev ?? Math.max((params.durationMax ?? 1) - (params.durationMin ?? 0), 1) / 6,
-        params.durationMin ?? 0,
-        params.durationMax,
+        config?.mean ?? config?.mode ?? 1,
+        config?.stddev ?? Math.max((config?.max ?? 1) - (config?.min ?? 0), 1) / 6,
+        config?.min ?? 0,
+        config?.max,
         random
       );
     case 'exponential':
-      return exponential(params.durationMean ?? 1, random);
+      return exponential(config?.lambda ? 1 / config.lambda : config?.mean ?? 1, random);
     default:
       return 1;
   }
+}
+
+export function sampleInterarrival(mean: number, random: SeededRandom): number {
+  return exponential(Math.max(mean, Number.EPSILON), random);
+}
+
+export function pickWeighted<T extends PossibleOutput | PossibleError>(
+  entries: T[] | undefined,
+  random: SeededRandom
+): T | undefined {
+  if (!entries?.length) {
+    return undefined;
+  }
+
+  const weights = entries.map((entry) => clampProbability(entry.probability ?? 0));
+  const total = weights.reduce((sum, weight) => sum + weight, 0);
+
+  if (total <= 0) {
+    return entries[Math.floor(random.next() * entries.length)];
+  }
+
+  let needle = random.next() * total;
+
+  for (let index = 0; index < entries.length; index += 1) {
+    needle -= weights[index];
+
+    if (needle <= 0) {
+      return entries[index];
+    }
+  }
+
+  return entries[entries.length - 1];
 }
 
 export function bernoulli(probability: number | undefined, random: SeededRandom): boolean {
@@ -64,16 +92,16 @@ export function clampProbability(value: number): number {
   return Math.max(0, Math.min(1, value));
 }
 
-function inferDistribution(params: Partial<SimulationParameters>) {
-  if (params.durationMin !== undefined && params.durationMode !== undefined && params.durationMax !== undefined) {
+function inferDistribution(config: DurationConfig | undefined): DurationConfig['type'] {
+  if (config?.min !== undefined && config.mode !== undefined && config.max !== undefined) {
     return 'triangular';
   }
 
-  if (params.durationMin !== undefined && params.durationMax !== undefined) {
+  if (config?.min !== undefined && config.max !== undefined) {
     return 'uniform';
   }
 
-  return 'constant';
+  return 'fixed';
 }
 
 function uniform(min: number, max: number, random: SeededRandom): number {
@@ -99,7 +127,7 @@ function triangular(min: number, mode: number, max: number, random: SeededRandom
 
 function clippedNormal(
   mean: number,
-  stdDev: number,
+  stddev: number,
   min: number,
   max: number | undefined,
   random: SeededRandom
@@ -107,7 +135,7 @@ function clippedNormal(
   const u1 = Math.max(random.next(), Number.EPSILON);
   const u2 = random.next();
   const z = Math.sqrt(-2 * Math.log(u1)) * Math.cos(2 * Math.PI * u2);
-  const sampled = mean + Math.abs(stdDev) * z;
+  const sampled = mean + Math.abs(stddev) * z;
   const clippedLow = Math.max(min, sampled);
 
   return nonNegative(max === undefined ? clippedLow : Math.min(max, clippedLow));

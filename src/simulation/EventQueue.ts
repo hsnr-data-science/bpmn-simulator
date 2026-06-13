@@ -1,21 +1,18 @@
-export type ScheduledEvent<T> = {
-  time: number;
-  sequence: number;
-  payload: T;
-};
+import type { SimulationEvent, SimulationEventType } from '../types/simulation';
 
-export class EventQueue<T> {
-  private heap: ScheduledEvent<T>[] = [];
+export class EventQueue {
+  private heap: SimulationEvent[] = [];
   private sequence = 0;
 
   get length(): number {
     return this.heap.length;
   }
 
-  push(time: number, payload: T): ScheduledEvent<T> {
-    const event = {
+  schedule<TPayload>(type: SimulationEventType, time: number, payload: TPayload): SimulationEvent<TPayload> {
+    const event: SimulationEvent<TPayload> = {
+      id: this.sequence++,
+      type,
       time,
-      sequence: this.sequence++,
       payload
     };
 
@@ -25,7 +22,7 @@ export class EventQueue<T> {
     return event;
   }
 
-  pop(): ScheduledEvent<T> | undefined {
+  pop(): SimulationEvent | undefined {
     if (!this.heap.length) {
       return undefined;
     }
@@ -84,10 +81,10 @@ export class EventQueue<T> {
   }
 }
 
-function compare<T>(a: ScheduledEvent<T>, b: ScheduledEvent<T>): number {
+function compare(a: SimulationEvent, b: SimulationEvent): number {
   if (a.time !== b.time) {
     return a.time - b.time;
   }
 
-  return a.sequence - b.sequence;
+  return a.id - b.id;
 }

@@ -1,33 +1,131 @@
 {
   "name": "Simulation",
-  "uri": "https://example.com/schema/bpmn-des-simulation",
+  "uri": "https://hsnr.de/data-science/bpmn/simulation",
   "prefix": "sim",
   "xml": {
     "tagAlias": "lowerCase"
   },
   "types": [
     {
-      "name": "SimulationParameters",
+      "name": "TaskConfig",
       "superClass": ["Element"],
       "properties": [
         { "name": "enabled", "type": "Boolean", "isAttr": true },
-        { "name": "durationDistribution", "type": "String", "isAttr": true },
-        { "name": "durationMin", "type": "String", "isAttr": true },
-        { "name": "durationMode", "type": "String", "isAttr": true },
-        { "name": "durationMean", "type": "String", "isAttr": true },
-        { "name": "durationMax", "type": "String", "isAttr": true },
-        { "name": "durationStdDev", "type": "String", "isAttr": true },
-        { "name": "arrivalIntervalMean", "type": "String", "isAttr": true },
-        { "name": "successProbability", "type": "String", "isAttr": true },
-        { "name": "errorProbability", "type": "String", "isAttr": true },
-        { "name": "retryProbability", "type": "String", "isAttr": true },
-        { "name": "maxRetries", "type": "String", "isAttr": true },
-        { "name": "retryDelay", "type": "String", "isAttr": true },
-        { "name": "resourcePool", "type": "String", "isAttr": true },
-        { "name": "resourceCapacity", "type": "String", "isAttr": true },
+        { "name": "duration", "type": "Duration" },
+        { "name": "resource", "type": "Resource" },
+        { "name": "failure", "type": "Failure" },
+        { "name": "serviceOutput", "type": "ServiceOutput" },
+        { "name": "serviceError", "type": "ServiceError" }
+      ]
+    },
+    {
+      "name": "Duration",
+      "superClass": ["Element"],
+      "properties": [
+        { "name": "type", "type": "String", "isAttr": true },
+        { "name": "mean", "type": "String", "isAttr": true },
+        { "name": "stddev", "type": "String", "isAttr": true },
+        { "name": "min", "type": "String", "isAttr": true },
+        { "name": "max", "type": "String", "isAttr": true },
+        { "name": "mode", "type": "String", "isAttr": true },
+        { "name": "lambda", "type": "String", "isAttr": true }
+      ]
+    },
+    {
+      "name": "Resource",
+      "superClass": ["Element"],
+      "properties": [
+        { "name": "id", "type": "String", "isAttr": true },
+        { "name": "capacity", "type": "String", "isAttr": true },
+        { "name": "calendar", "type": "String", "isAttr": true }
+      ]
+    },
+    {
+      "name": "Failure",
+      "superClass": ["Element"],
+      "properties": [
         { "name": "probability", "type": "String", "isAttr": true },
-        { "name": "outputKey", "type": "String", "isAttr": true },
-        { "name": "outputValues", "type": "String", "isAttr": true }
+        { "name": "retryCount", "type": "String", "isAttr": true },
+        { "name": "retryDelay", "type": "RetryDelay" }
+      ]
+    },
+    {
+      "name": "RetryDelay",
+      "superClass": ["Element"],
+      "properties": [
+        { "name": "type", "type": "String", "isAttr": true },
+        { "name": "mean", "type": "String", "isAttr": true },
+        { "name": "stddev", "type": "String", "isAttr": true },
+        { "name": "min", "type": "String", "isAttr": true },
+        { "name": "max", "type": "String", "isAttr": true },
+        { "name": "mode", "type": "String", "isAttr": true },
+        { "name": "lambda", "type": "String", "isAttr": true }
+      ]
+    },
+    {
+      "name": "ServiceOutput",
+      "superClass": ["Element"],
+      "properties": [
+        { "name": "distribution", "type": "String", "isAttr": true },
+        { "name": "possibleOutputs", "type": "PossibleOutput", "isMany": true }
+      ]
+    },
+    {
+      "name": "PossibleOutput",
+      "superClass": ["Element"],
+      "properties": [
+        { "name": "value", "type": "String", "isAttr": true },
+        { "name": "probability", "type": "String", "isAttr": true }
+      ]
+    },
+    {
+      "name": "ServiceError",
+      "superClass": ["Element"],
+      "properties": [
+        { "name": "probability", "type": "String", "isAttr": true },
+        { "name": "possibleErrors", "type": "PossibleError", "isMany": true }
+      ]
+    },
+    {
+      "name": "PossibleError",
+      "superClass": ["Element"],
+      "properties": [
+        { "name": "errorCode", "type": "String", "isAttr": true },
+        { "name": "probability", "type": "String", "isAttr": true }
+      ]
+    },
+    {
+      "name": "StartEventConfig",
+      "superClass": ["Element"],
+      "properties": [
+        { "name": "enabled", "type": "Boolean", "isAttr": true },
+        { "name": "arrival", "type": "Arrival" }
+      ]
+    },
+    {
+      "name": "Arrival",
+      "superClass": ["Element"],
+      "properties": [
+        { "name": "type", "type": "String", "isAttr": true },
+        { "name": "interval", "type": "String", "isAttr": true },
+        { "name": "mean", "type": "String", "isAttr": true },
+        { "name": "schedule", "type": "String", "isAttr": true },
+        { "name": "numberOfCases", "type": "String", "isAttr": true }
+      ]
+    },
+    {
+      "name": "SequenceFlowConfig",
+      "superClass": ["Element"],
+      "properties": [
+        { "name": "enabled", "type": "Boolean", "isAttr": true },
+        { "name": "branch", "type": "Branch" }
+      ]
+    },
+    {
+      "name": "Branch",
+      "superClass": ["Element"],
+      "properties": [
+        { "name": "probability", "type": "String", "isAttr": true }
       ]
     }
   ]

@@ -7,29 +7,32 @@ import {
   TextFieldEntry
 } from '@bpmn-io/properties-panel';
 import { useService } from 'bpmn-js-properties-panel';
-import {
-  getRawSimulationValue,
-  isSimulationSupported,
-  updateSimulationParameter,
-  type BpmnElement,
-  type BpmnFactory,
-  type Modeling
-} from '../bpmn/simulationExtension';
-import type { DurationDistribution, SimulationParameters } from '../des/types';
+import { isSimulationEditable, isTaskType } from '../bpmn/BpmnElementClassifier';
+import { readRawSimulationValue } from '../bpmn/ExtensionElementReader';
+import { updateSimulationValue } from '../bpmn/ExtensionElementWriter';
+import type { BpmnElement, BpmnFactory, Modeling } from '../types/bpmn';
+import { branchProbabilityEntries } from './entries/BranchProbabilityEntry';
+import { durationDistributionEntries } from './entries/DurationDistributionEntry';
+import { resourceEntries } from './entries/ResourceEntry';
+import { serviceTaskOutputEntries } from './entries/ServiceTaskOutputEntry';
 
-type Entry = {
+type EntryDefinition = {
   id: string;
-  element: BpmnElement;
-  component: (props: Entry) => unknown;
-  isEdited?: (...args: unknown[]) => boolean;
-  label?: string;
-  field?: keyof SimulationParameters;
+  label: string;
+  path: string[];
+  control: 'text' | 'select' | 'checkbox';
   type?: string;
   min?: string;
   max?: string;
   step?: string;
-  validate?: (value: string) => string | undefined;
-  getOptions?: () => Array<{ label: string; value: string }>;
+  validate?: 'probability' | 'nonNegativeNumber' | 'positiveInteger' | 'nonNegativeInteger';
+  options?: Array<{ label: string; value: string }>;
+};
+
+type Entry = EntryDefinition & {
+  element: BpmnElement;
+  component: (props: Entry) => unknown;
+  isEdited?: (...args: unknown[]) => boolean;
 };
 
 type Group = {
@@ -51,11 +54,15 @@ export default class SimulationPropertiesProvider {
 
   getGroups(element: BpmnElement) {
     return (groups: Group[]) => {
-      if (!isSimulationSupported(element)) {
+      if (!isSimulationEditable(element.businessObject)) {
         return groups;
       }
 
-      groups.push(createSimulationGroup(element));
+      groups.push({
+        id: 'desSimulation',
+        label: 'DES Simulation',
+        entries: createEntries(element)
+      });
 
       return groups;
     };
@@ -67,166 +74,58 @@ export const SimulationPropertiesProviderModule = {
   simulationPropertiesProvider: ['type', SimulationPropertiesProvider]
 };
 
-function createSimulationGroup(element: BpmnElement): Group {
-  return {
-    id: 'desSimulation',
-    label: 'DES Simulation',
-    entries: createEntries(element)
-  };
-}
-
 function createEntries(element: BpmnElement): Entry[] {
   const type = element.businessObject?.$type ?? '';
-  const entries: Entry[] = [
-    checkboxEntry(element, 'sim-enabled', 'In DES verwenden', 'enabled')
+  const definitions: EntryDefinition[] = [
+    {
+      id: 'sim-enabled',
+      label: 'In DES verwenden',
+      path: ['enabled'],
+      control: 'checkbox'
+    }
   ];
 
   if (type === 'bpmn:StartEvent') {
-    entries.push(
-      textEntry(element, 'sim-arrival', 'Mittlere Ankunftszeit', 'arrivalIntervalMean', {
-        type: 'number',
-        min: '0',
-        step: '0.1',
-        validate: positiveNumber
-      })
-    );
+    definitions.push(...startEventEntries());
   }
 
   if (type === 'bpmn:SequenceFlow') {
-    entries.push(
-      textEntry(element, 'sim-probability', 'Pfadwahrscheinlichkeit', 'probability', {
-        type: 'number',
-        min: '0',
-        max: '1',
-        step: '0.01',
-        validate: probability
-      })
+    definitions.push(...branchProbabilityEntries() as EntryDefinition[]);
+  }
+
+  if (isTaskType(type) || type === 'bpmn:SubProcess') {
+    definitions.push(
+      ...(durationDistributionEntries() as EntryDefinition[]),
+      ...(resourceEntries() as EntryDefinition[])
     );
   }
 
-  if (isActivityType(type)) {
-    entries.push(
-      selectEntry(element, 'sim-duration-distribution', 'Zeitverteilung', 'durationDistribution', durationOptions),
-      textEntry(element, 'sim-duration-min', 'Dauer Minimum', 'durationMin', {
-        type: 'number',
-        min: '0',
-        step: '0.1',
-        validate: positiveNumber
-      }),
-      textEntry(element, 'sim-duration-mode', 'Dauer Modus', 'durationMode', {
-        type: 'number',
-        min: '0',
-        step: '0.1',
-        validate: positiveNumber
-      }),
-      textEntry(element, 'sim-duration-mean', 'Dauer Mittelwert', 'durationMean', {
-        type: 'number',
-        min: '0',
-        step: '0.1',
-        validate: positiveNumber
-      }),
-      textEntry(element, 'sim-duration-max', 'Dauer Maximum', 'durationMax', {
-        type: 'number',
-        min: '0',
-        step: '0.1',
-        validate: positiveNumber
-      }),
-      textEntry(element, 'sim-duration-stddev', 'Dauer Std. Abw.', 'durationStdDev', {
-        type: 'number',
-        min: '0',
-        step: '0.1',
-        validate: positiveNumber
-      }),
-      textEntry(element, 'sim-resource-pool', 'Ressourcenpool', 'resourcePool'),
-      textEntry(element, 'sim-resource-capacity', 'Kapazitaet', 'resourceCapacity', {
-        type: 'number',
-        min: '1',
-        step: '1',
-        validate: positiveInteger
-      }),
-      textEntry(element, 'sim-error-probability', 'Fehlerwahrscheinlichkeit', 'errorProbability', {
-        type: 'number',
-        min: '0',
-        max: '1',
-        step: '0.01',
-        validate: probability
-      }),
-      textEntry(element, 'sim-retry-probability', 'Retry-Wahrscheinlichkeit', 'retryProbability', {
-        type: 'number',
-        min: '0',
-        max: '1',
-        step: '0.01',
-        validate: probability
-      }),
-      textEntry(element, 'sim-max-retries', 'Max. Retries', 'maxRetries', {
-        type: 'number',
-        min: '0',
-        step: '1',
-        validate: nonNegativeInteger
-      }),
-      textEntry(element, 'sim-retry-delay', 'Retry Delay', 'retryDelay', {
-        type: 'number',
-        min: '0',
-        step: '0.1',
-        validate: positiveNumber
-      }),
-      textEntry(element, 'sim-output-key', 'Output-Schluessel', 'outputKey'),
-      textEntry(element, 'sim-output-values', 'Output-Werte', 'outputValues')
-    );
+  if (type === 'bpmn:ServiceTask') {
+    definitions.push(...(serviceTaskOutputEntries() as EntryDefinition[]));
   }
 
-  return entries;
+  return definitions.map((definition) => createEntry(element, definition));
 }
 
-function textEntry(
-  element: BpmnElement,
-  id: string,
-  label: string,
-  field: keyof SimulationParameters,
-  options: Partial<Entry> = {}
-): Entry {
-  return {
-    id,
-    element,
-    label,
-    field,
-    component: SimulationTextField,
-    isEdited: isTextFieldEntryEdited,
-    ...options
-  };
-}
+function createEntry(element: BpmnElement, definition: EntryDefinition): Entry {
+  const component =
+    definition.control === 'select'
+      ? SimulationSelect
+      : definition.control === 'checkbox'
+        ? SimulationCheckbox
+        : SimulationTextField;
+  const isEdited =
+    definition.control === 'select'
+      ? isSelectEntryEdited
+      : definition.control === 'checkbox'
+        ? isCheckboxEntryEdited
+        : isTextFieldEntryEdited;
 
-function selectEntry(
-  element: BpmnElement,
-  id: string,
-  label: string,
-  field: keyof SimulationParameters,
-  getOptions: () => Array<{ label: string; value: string }>
-): Entry {
   return {
-    id,
+    ...definition,
     element,
-    label,
-    field,
-    getOptions,
-    component: SimulationSelect,
-    isEdited: isSelectEntryEdited
-  };
-}
-
-function checkboxEntry(
-  element: BpmnElement,
-  id: string,
-  label: string,
-  field: keyof SimulationParameters
-): Entry {
-  return {
-    id,
-    element,
-    label,
-    field,
-    component: SimulationCheckbox,
-    isEdited: isCheckboxEntryEdited
+    component,
+    isEdited
   };
 }
 
@@ -244,21 +143,11 @@ function SimulationTextField(props: Entry): unknown {
     max: props.max,
     step: props.step,
     debounce,
-    getValue: () => {
-      const value = getRawSimulationValue(props.element.businessObject, props.field as keyof SimulationParameters);
-
-      return typeof value === 'boolean' ? String(value) : value ?? '';
-    },
+    getValue: () => readRawSimulationValue(props.element.businessObject, props.path) ?? '',
     setValue: (value: string | undefined) => {
-      updateSimulationParameter(
-        props.element,
-        props.field as keyof SimulationParameters,
-        value,
-        bpmnFactory,
-        modeling
-      );
+      updateSimulationValue(props.element, getConfigKind(props.element), props.path, value, bpmnFactory, modeling);
     },
-    validate: props.validate
+    validate: props.validate ? validators[props.validate] : undefined
   });
 }
 
@@ -270,18 +159,10 @@ function SimulationSelect(props: Entry): unknown {
     id: props.id,
     element: props.element,
     label: props.label,
-    getOptions: props.getOptions,
-    getValue: () => {
-      return getRawSimulationValue(props.element.businessObject, props.field as keyof SimulationParameters) ?? '';
-    },
-    setValue: (value: DurationDistribution | '') => {
-      updateSimulationParameter(
-        props.element,
-        props.field as keyof SimulationParameters,
-        value,
-        bpmnFactory,
-        modeling
-      );
+    getOptions: () => props.options ?? [],
+    getValue: () => readRawSimulationValue(props.element.businessObject, props.path) ?? '',
+    setValue: (value: string | undefined) => {
+      updateSimulationValue(props.element, getConfigKind(props.element), props.path, value, bpmnFactory, modeling);
     }
   });
 }
@@ -295,99 +176,117 @@ function SimulationCheckbox(props: Entry): unknown {
     element: props.element,
     label: props.label,
     getValue: () => {
-      const value = getRawSimulationValue(props.element.businessObject, props.field as keyof SimulationParameters);
+      const value = readRawSimulationValue(props.element.businessObject, props.path);
 
       return value === undefined ? true : value === true || value === 'true';
     },
     setValue: (value: boolean) => {
-      updateSimulationParameter(
-        props.element,
-        props.field as keyof SimulationParameters,
-        value,
-        bpmnFactory,
-        modeling
-      );
+      updateSimulationValue(props.element, getConfigKind(props.element), props.path, value, bpmnFactory, modeling);
     }
   });
 }
 
-function durationOptions(): Array<{ label: string; value: string }> {
+function startEventEntries(): EntryDefinition[] {
   return [
-    { label: 'Konstant', value: 'constant' },
-    { label: 'Gleichverteilung', value: 'uniform' },
-    { label: 'Dreieck', value: 'triangular' },
-    { label: 'Normal', value: 'normal' },
-    { label: 'Exponential', value: 'exponential' }
+    {
+      id: 'sim-arrival-type',
+      label: 'Arrival Distribution',
+      path: ['arrival', 'type'],
+      control: 'select',
+      options: [
+        { label: 'Fixed Interval', value: 'fixedInterval' },
+        { label: 'Exponential Interarrival', value: 'exponentialInterarrival' },
+        { label: 'Schedule', value: 'schedule' }
+      ]
+    },
+    {
+      id: 'sim-arrival-interval',
+      label: 'Arrival Interval',
+      path: ['arrival', 'interval'],
+      control: 'text',
+      type: 'number',
+      min: '0',
+      step: '0.1',
+      validate: 'nonNegativeNumber'
+    },
+    {
+      id: 'sim-arrival-mean',
+      label: 'Arrival Mean',
+      path: ['arrival', 'mean'],
+      control: 'text',
+      type: 'number',
+      min: '0',
+      step: '0.1',
+      validate: 'nonNegativeNumber'
+    },
+    {
+      id: 'sim-arrival-schedule',
+      label: 'Arrival Schedule',
+      path: ['arrival', 'schedule'],
+      control: 'text'
+    },
+    {
+      id: 'sim-number-of-cases',
+      label: 'Number Of Cases',
+      path: ['arrival', 'numberOfCases'],
+      control: 'text',
+      type: 'number',
+      min: '1',
+      step: '1',
+      validate: 'positiveInteger'
+    }
   ];
 }
 
-function isActivityType(type: string): boolean {
-  return [
-    'bpmn:Task',
-    'bpmn:UserTask',
-    'bpmn:ServiceTask',
-    'bpmn:ScriptTask',
-    'bpmn:BusinessRuleTask',
-    'bpmn:ManualTask',
-    'bpmn:ReceiveTask',
-    'bpmn:SendTask',
-    'bpmn:CallActivity',
-    'bpmn:SubProcess'
-  ].includes(type);
+function getConfigKind(element: BpmnElement): 'task' | 'startEvent' | 'sequenceFlow' {
+  if (element.businessObject?.$type === 'bpmn:StartEvent') {
+    return 'startEvent';
+  }
+
+  if (element.businessObject?.$type === 'bpmn:SequenceFlow') {
+    return 'sequenceFlow';
+  }
+
+  return 'task';
 }
 
-function probability(value: string): string | undefined {
-  if (!value) {
-    return undefined;
+const validators = {
+  probability(value: string): string | undefined {
+    if (!value) {
+      return undefined;
+    }
+
+    const number = Number(value);
+
+    return Number.isFinite(number) && number >= 0 && number <= 1
+      ? undefined
+      : 'Wert zwischen 0 und 1 erwartet.';
+  },
+  nonNegativeNumber(value: string): string | undefined {
+    if (!value) {
+      return undefined;
+    }
+
+    const number = Number(value);
+
+    return Number.isFinite(number) && number >= 0 ? undefined : 'Nicht-negative Zahl erwartet.';
+  },
+  positiveInteger(value: string): string | undefined {
+    if (!value) {
+      return undefined;
+    }
+
+    const number = Number(value);
+
+    return Number.isInteger(number) && number > 0 ? undefined : 'Ganzzahl groesser 0 erwartet.';
+  },
+  nonNegativeInteger(value: string): string | undefined {
+    if (!value) {
+      return undefined;
+    }
+
+    const number = Number(value);
+
+    return Number.isInteger(number) && number >= 0 ? undefined : 'Nicht-negative Ganzzahl erwartet.';
   }
-
-  const number = Number(value);
-
-  if (!Number.isFinite(number) || number < 0 || number > 1) {
-    return 'Wert zwischen 0 und 1 erwartet.';
-  }
-
-  return undefined;
-}
-
-function positiveNumber(value: string): string | undefined {
-  if (!value) {
-    return undefined;
-  }
-
-  const number = Number(value);
-
-  if (!Number.isFinite(number) || number < 0) {
-    return 'Nicht-negative Zahl erwartet.';
-  }
-
-  return undefined;
-}
-
-function positiveInteger(value: string): string | undefined {
-  if (!value) {
-    return undefined;
-  }
-
-  const number = Number(value);
-
-  if (!Number.isInteger(number) || number < 1) {
-    return 'Ganzzahl groesser 0 erwartet.';
-  }
-
-  return undefined;
-}
-
-function nonNegativeInteger(value: string): string | undefined {
-  if (!value) {
-    return undefined;
-  }
-
-  const number = Number(value);
-
-  if (!Number.isInteger(number) || number < 0) {
-    return 'Nicht-negative Ganzzahl erwartet.';
-  }
-
-  return undefined;
-}
+};

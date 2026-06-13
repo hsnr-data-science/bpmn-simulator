@@ -4,19 +4,27 @@ export const defaultDiagram = `<?xml version="1.0" encoding="UTF-8"?>
   xmlns:bpmndi="http://www.omg.org/spec/BPMN/20100524/DI"
   xmlns:dc="http://www.omg.org/spec/DD/20100524/DC"
   xmlns:di="http://www.omg.org/spec/DD/20100524/DI"
-  xmlns:sim="https://example.com/schema/bpmn-des-simulation"
+  xmlns:sim="https://hsnr.de/data-science/bpmn/simulation"
   id="Definitions_DES_Demo"
   targetNamespace="https://example.com/bpmn-des-simulator">
   <bpmn:process id="Process_Order_Fulfillment" name="Order Fulfillment DES Demo" isExecutable="false">
     <bpmn:startEvent id="StartEvent_Order" name="Order received">
       <bpmn:extensionElements>
-        <sim:SimulationParameters arrivalIntervalMean="1.5" />
+        <sim:startEventConfig>
+          <sim:arrival type="exponentialInterarrival" mean="1.5" numberOfCases="250" />
+        </sim:startEventConfig>
       </bpmn:extensionElements>
       <bpmn:outgoing>Flow_Start_Check</bpmn:outgoing>
     </bpmn:startEvent>
     <bpmn:userTask id="Task_Check_Order" name="Check order">
       <bpmn:extensionElements>
-        <sim:SimulationParameters durationDistribution="triangular" durationMin="2" durationMode="4" durationMax="8" errorProbability="0.02" retryProbability="0.05" maxRetries="1" retryDelay="1" resourcePool="Clerks" resourceCapacity="2" />
+        <sim:taskConfig>
+          <sim:duration type="triangular" min="2" mode="4" max="8" />
+          <sim:resource id="Clerks" capacity="2" />
+          <sim:failure probability="0.02" retryCount="1">
+            <sim:retryDelay type="fixed" mean="1" />
+          </sim:failure>
+        </sim:taskConfig>
       </bpmn:extensionElements>
       <bpmn:incoming>Flow_Start_Check</bpmn:incoming>
       <bpmn:outgoing>Flow_Check_Gateway</bpmn:outgoing>
@@ -28,21 +36,48 @@ export const defaultDiagram = `<?xml version="1.0" encoding="UTF-8"?>
     </bpmn:exclusiveGateway>
     <bpmn:serviceTask id="Task_Pick_Pack" name="Pick and pack">
       <bpmn:extensionElements>
-        <sim:SimulationParameters durationDistribution="normal" durationMean="6" durationStdDev="1.5" durationMin="1" errorProbability="0.03" retryProbability="0.04" maxRetries="2" retryDelay="2" resourcePool="Warehouse" resourceCapacity="3" outputKey="shipmentPriority" outputValues="standard,express" />
+        <sim:taskConfig>
+          <sim:duration type="normal" mean="6" stddev="1.5" min="1" />
+          <sim:resource id="Warehouse" capacity="3" />
+          <sim:failure probability="0.03" retryCount="2">
+            <sim:retryDelay type="fixed" mean="2" />
+          </sim:failure>
+          <sim:serviceOutput distribution="categorical">
+            <sim:possibleOutput value="standard" probability="0.75" />
+            <sim:possibleOutput value="express" probability="0.25" />
+          </sim:serviceOutput>
+          <sim:serviceError probability="0.02">
+            <sim:possibleError errorCode="PICKING_ERROR" probability="0.6" />
+            <sim:possibleError errorCode="PACKING_ERROR" probability="0.4" />
+          </sim:serviceError>
+        </sim:taskConfig>
       </bpmn:extensionElements>
       <bpmn:incoming>Flow_Stock_Yes</bpmn:incoming>
       <bpmn:outgoing>Flow_Pack_Ship</bpmn:outgoing>
     </bpmn:serviceTask>
     <bpmn:manualTask id="Task_Backorder" name="Backorder item">
       <bpmn:extensionElements>
-        <sim:SimulationParameters durationDistribution="uniform" durationMin="12" durationMax="36" resourcePool="Procurement" resourceCapacity="1" errorProbability="0.01" />
+        <sim:taskConfig>
+          <sim:duration type="uniform" min="12" max="36" />
+          <sim:resource id="Procurement" capacity="1" />
+          <sim:failure probability="0.01" retryCount="0" />
+        </sim:taskConfig>
       </bpmn:extensionElements>
       <bpmn:incoming>Flow_Stock_No</bpmn:incoming>
       <bpmn:outgoing>Flow_Backorder_Ship</bpmn:outgoing>
     </bpmn:manualTask>
     <bpmn:serviceTask id="Task_Ship" name="Ship order">
       <bpmn:extensionElements>
-        <sim:SimulationParameters durationDistribution="triangular" durationMin="3" durationMode="5" durationMax="12" errorProbability="0.02" retryProbability="0.03" maxRetries="1" retryDelay="2" resourcePool="Shipping" resourceCapacity="2" />
+        <sim:taskConfig>
+          <sim:duration type="triangular" min="3" mode="5" max="12" />
+          <sim:resource id="Shipping" capacity="2" />
+          <sim:failure probability="0.02" retryCount="1">
+            <sim:retryDelay type="fixed" mean="2" />
+          </sim:failure>
+          <sim:serviceError probability="0.01">
+            <sim:possibleError errorCode="SHIPMENT_ERROR" probability="1" />
+          </sim:serviceError>
+        </sim:taskConfig>
       </bpmn:extensionElements>
       <bpmn:incoming>Flow_Pack_Ship</bpmn:incoming>
       <bpmn:incoming>Flow_Backorder_Ship</bpmn:incoming>
@@ -55,12 +90,16 @@ export const defaultDiagram = `<?xml version="1.0" encoding="UTF-8"?>
     <bpmn:sequenceFlow id="Flow_Check_Gateway" sourceRef="Task_Check_Order" targetRef="Gateway_Stock" />
     <bpmn:sequenceFlow id="Flow_Stock_Yes" name="yes" sourceRef="Gateway_Stock" targetRef="Task_Pick_Pack">
       <bpmn:extensionElements>
-        <sim:SimulationParameters probability="0.78" />
+        <sim:sequenceFlowConfig>
+          <sim:branch probability="0.78" />
+        </sim:sequenceFlowConfig>
       </bpmn:extensionElements>
     </bpmn:sequenceFlow>
     <bpmn:sequenceFlow id="Flow_Stock_No" name="no" sourceRef="Gateway_Stock" targetRef="Task_Backorder">
       <bpmn:extensionElements>
-        <sim:SimulationParameters probability="0.22" />
+        <sim:sequenceFlowConfig>
+          <sim:branch probability="0.22" />
+        </sim:sequenceFlowConfig>
       </bpmn:extensionElements>
     </bpmn:sequenceFlow>
     <bpmn:sequenceFlow id="Flow_Pack_Ship" sourceRef="Task_Pick_Pack" targetRef="Task_Ship" />

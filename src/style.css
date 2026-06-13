@@ -92,6 +92,11 @@ input {
   background: #16796b;
 }
 
+.secondary-button {
+  border-color: #5f6f6a;
+  background: #465a55;
+}
+
 .icon-button:disabled {
   color: #a4aaa7;
   background: #eef1ef;
@@ -205,6 +210,11 @@ input {
   list-style: none;
 }
 
+.event-log-list {
+  max-height: 220px;
+  overflow: auto;
+}
+
 .rank-list li,
 .warning-list li {
   min-width: 0;
@@ -212,6 +222,49 @@ input {
   border: 1px solid #dce2df;
   border-radius: 8px;
   background: #ffffff;
+}
+
+.stats-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.stats-table td {
+  padding: 7px 6px;
+  border-bottom: 1px solid #dce2df;
+}
+
+.stats-table td:last-child {
+  color: #134d44;
+  font-weight: 700;
+  text-align: right;
+}
+
+.export-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.text-button {
+  height: 30px;
+  padding: 0 10px;
+  border: 1px solid #c4ccc8;
+  border-radius: 6px;
+  color: #23302b;
+  background: #ffffff;
+  cursor: pointer;
+}
+
+.text-button:disabled {
+  color: #a4aaa7;
+  background: #eef1ef;
+  cursor: not-allowed;
+}
+
+.hidden-log {
+  display: none;
 }
 
 .rank-list li {
@@ -243,6 +296,16 @@ input {
   background: #fff8ec;
 }
 
+.warning-list li[data-level="error"] {
+  color: #7a2c2a;
+  background: #fff0f0;
+}
+
+.warning-list li[data-level="info"] {
+  color: #3c5852;
+  background: #eef8f5;
+}
+
 .diagram-shell {
   min-width: 0;
   min-height: 0;
@@ -263,10 +326,10 @@ input {
 
 .des-overlay {
   display: grid;
-  grid-template-columns: auto auto auto;
+  grid-template-columns: auto auto auto auto;
   align-items: center;
   gap: 4px;
-  min-width: 52px;
+  min-width: 86px;
   padding: 3px 6px;
   border: 1px solid color-mix(in srgb, #16796b var(--heat), #cfd7d3);
   border-radius: 6px;
@@ -306,6 +369,16 @@ input {
 
 .djs-element.des-error-risk .djs-visual > :first-child {
   stroke: #b4413c !important;
+  stroke-width: 4px !important;
+}
+
+.djs-element.des-current-task .djs-visual > :first-child {
+  filter: drop-shadow(0 0 5px rgb(22 121 107 / 55%));
+}
+
+.djs-element.des-unsupported .djs-visual > :first-child {
+  stroke: #6b5b95 !important;
+  stroke-dasharray: 7 4 !important;
   stroke-width: 4px !important;
 }
 
