@@ -77,6 +77,31 @@ export function updateResourceCatalog(
   });
 }
 
+export function updateConditionExpression(
+  element: BpmnElement,
+  value: string | undefined,
+  bpmnFactory: BpmnFactory,
+  modeling: Modeling
+): void {
+  const businessObject = element.businessObject;
+
+  if (!businessObject) {
+    return;
+  }
+
+  const body = value?.trim();
+  const conditionExpression = body
+    ? bpmnFactory.create('bpmn:FormalExpression', {
+      body,
+      language: 'JavaScript'
+    })
+    : undefined;
+
+  modeling.updateModdleProperties(element, businessObject, {
+    conditionExpression
+  });
+}
+
 export function updateDurationConfig(
   element: BpmnElement,
   duration: DurationConfig,

@@ -98,6 +98,12 @@ Die Parameter werden im BPMN XML unter `bpmn:extensionElements` gespeichert:
       </sim:failure>
   </sim:taskConfig>
 </bpmn:extensionElements>
+
+<bpmn:sequenceFlow id="Flow_Manual_Check" sourceRef="Gateway_Check" targetRef="Task_Manual_Check">
+  <bpmn:conditionExpression xsi:type="bpmn:tFormalExpression" language="JavaScript">
+    status === "manual"
+  </bpmn:conditionExpression>
+</bpmn:sequenceFlow>
 ```
 
 Editierbar im Properties Panel sind:
@@ -105,7 +111,7 @@ Editierbar im Properties Panel sind:
 - Tasks: dynamische Dauerverteilung `fixed`, `uniform`, `normal`, `exponential`, `triangular`; je nach Auswahl werden nur die passenden Parameterfelder angezeigt. Dazu kommen Ressourcenauswahl per Dropdown, Fehlerwahrscheinlichkeit, Retry-Anzahl und Retry-Delay.
 - User Tasks, Script Tasks, Receive Tasks und Service Tasks: einfache Output-Objekte als Key-Value-Liste.
 - Service Tasks: zusaetzlich Fehlerwahrscheinlichkeit und mögliche Fehlercodes; stochastische Outputs werden ueber Output-Objects modelliert.
-- Sequence Flows: Branch-Wahrscheinlichkeit für XOR-Gateways ohne Bedingungen.
+- Sequence Flows: JavaScript-Condition als BPMN `conditionExpression` im Documentation-Bereich und Branch-Wahrscheinlichkeit im DES-Bereich für XOR-Gateways ohne Bedingungen.
 - Start Events: Ankunftsverteilung, Intervall-/Mittelwert-/Schedule-Felder und Anzahl der Cases.
 
 Globale Ressourcen werden in einem eigenen einklappbaren Ressourcenbereich der Anwendung gepflegt. Jede Ressource besitzt ID, Name, Kapazität und Verfügbarkeitskalender/Arbeitszeiten. Tasks speichern nur die Resource-ID als Referenz; Kapazität und Kalender werden beim Aufbau des Simulationsmodells aus dem globalen Katalog aufgelöst.
@@ -114,7 +120,7 @@ Arbeitszeiten werden ausschliesslich strukturiert gespeichert: `weekdays` nutzt 
 
 Output-Objekte sind bewusst flach und enthalten keine verschachtelten JSON-Strukturen. Im Properties Panel werden sie als eigene einklappbare Liste gepflegt: Felder koennen hinzugefuegt oder entfernt werden, jedes Feld hat einen Namen, einen Typ und danach passende Generator-/Verteilungsparameter.
 
-Unterstuetzte Feldtypen sind `int`, `float` und `string`. Zahlen koennen `fixed`, `randomChoice`, `uniform`, `normal`, `exponential` oder `triangular` nutzen. Strings koennen `random`, `fixed` oder `categorical` nutzen. Die UI blendet je nach Typ und Generator nur die passenden Parameter ein, z. B. Min/Max fuer `uniform`, Mean/Stddev fuer `normal`, Wertelisten fuer `randomChoice` und Kategorien fuer `categorical`.
+Unterstuetzte Feldtypen sind `int`, `float` und `string`. Zahlen koennen `fixed`, `randomChoice`, `uniform`, `normal`, `exponential` oder `triangular` nutzen. Strings koennen `random`, `fixed` oder `categorical` nutzen. Die UI blendet je nach Typ und Generator nur die passenden Parameter ein, z. B. Min/Max fuer `uniform`, Mean/Stddev fuer `normal`, Wertelisten fuer `randomChoice` und Kategorien fuer `categorical`. Neue Choice-Felder starten mit drei Beispielwerten (`1/2/3` bzw. `a/b/c`), damit die Syntax sichtbar ist.
 
 Die Konfiguration liegt als generisches `sim:outputObject` in den BPMN Extension Elements vor und kann spaeter auch an Event-Konfigurationen wiederverwendet werden.
 
@@ -162,7 +168,7 @@ Nicht unterstützte Elemente brechen die Simulation nicht ab. Sie erzeugen eine 
 
 ## XOR-Logik
 
-Wenn ausgehende Sequence Flows Bedingungen haben, werden Bedingungen vorrangig behandelt. Die Methode `evaluateCondition(conditionExpression, context)` ist bewusst als Stub vorbereitet und liefert im MVP `false`; danach wird, falls vorhanden, der Default Flow verwendet. Existiert kein Default Flow, erzeugt die Simulation eine Warnung.
+Wenn ausgehende Sequence Flows Bedingungen haben, werden Bedingungen vorrangig behandelt. Conditions werden als einfache JavaScript-Ausdruecke ausgewertet, z. B. `status === "ok"` oder `outputs.Task_Check_Order.priority >= 2`. Output-Object-Felder vorheriger Activities stehen flach als Prozessvariablen zur Verfuegung; zusaetzlich sind die verschachtelten Objekte ueber `outputs`, `outputObjects` bzw. `processVariables` erreichbar. Falls keine Bedingung wahr ist, wird der Default Flow verwendet. Existiert kein Default Flow, erzeugt die Simulation eine Warnung.
 
 Wenn keine Bedingungen vorhanden sind, nutzt der Interpreter `branchProbability` aus den Extension Elements. Fehlende Wahrscheinlichkeiten werden gleichverteilt gewählt und als Warnung geloggt. Summen ungleich `1` werden normalisiert und ebenfalls als Warnung sichtbar gemacht.
 

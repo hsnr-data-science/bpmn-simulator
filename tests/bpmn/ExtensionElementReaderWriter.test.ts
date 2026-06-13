@@ -1,8 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import type { BpmnBusinessObject, BpmnElement } from '../../src/types/bpmn';
-import { readResourceCatalog, readTaskConfig } from '../../src/bpmn/ExtensionElementReader';
+import { readConditionExpression, readResourceCatalog, readTaskConfig } from '../../src/bpmn/ExtensionElementReader';
 import {
+  updateConditionExpression,
   updateDurationConfig,
   updateOutputObjectFields,
   updateResourceCatalog,
@@ -145,6 +146,40 @@ test('ExtensionElementWriter replaces duration attributes when the distribution 
     lambda: undefined,
     mode: undefined
   });
+});
+
+test('ExtensionElementWriter persists sequence flow JavaScript conditions as BPMN formal expressions', () => {
+  const businessObject: BpmnBusinessObject = {
+    $type: 'bpmn:SequenceFlow',
+    id: 'flow'
+  };
+  const element: BpmnElement = {
+    id: 'flow',
+    businessObject
+  };
+  const bpmnFactory = {
+    create(type: string, properties: Record<string, unknown> = {}) {
+      return {
+        $type: type,
+        ...properties
+      };
+    }
+  };
+  const modeling = {
+    updateModdleProperties(
+      _element: BpmnElement,
+      moddleElement: BpmnBusinessObject,
+      properties: Record<string, unknown>
+    ) {
+      Object.assign(moddleElement, properties);
+    }
+  };
+
+  updateConditionExpression(element, 'status === "ok"', bpmnFactory, modeling);
+
+  assert.equal(businessObject.conditionExpression?.$type, 'bpmn:FormalExpression');
+  assert.equal(businessObject.conditionExpression?.language, 'JavaScript');
+  assert.equal(readConditionExpression(businessObject), 'status === "ok"');
 });
 
 test('ExtensionElementWriter persists the global resource catalog', () => {

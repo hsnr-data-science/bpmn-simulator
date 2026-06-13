@@ -1,7 +1,7 @@
 import type { BpmnBusinessObject, BpmnDefinitions, SimFlow, SimModel, SimNode } from '../types/bpmn';
 import type { ElementSimulationConfig, SimulationResource } from '../types/simulation';
 import { classifyBpmnElement } from './BpmnElementClassifier';
-import { readResourceCatalog, readSimulationConfig } from './ExtensionElementReader';
+import { readConditionExpression, readResourceCatalog, readSimulationConfig } from './ExtensionElementReader';
 
 type BuildContext = {
   resources: Map<string, SimulationResource>;
@@ -149,23 +149,11 @@ function addFlow(element: BpmnBusinessObject, context: BuildContext): void {
     sourceId: element.sourceRef.id,
     targetId: element.targetRef.id,
     hasCondition: Boolean(element.conditionExpression),
-    conditionExpression: getConditionBody(element.conditionExpression),
+    conditionExpression: readConditionExpression(element),
     params: readSimulationConfig(element)
   });
 }
 
 function toIds(values: BpmnBusinessObject[] | undefined): string[] {
   return (values ?? []).map((value) => value.id).filter(Boolean) as string[];
-}
-
-function getConditionBody(conditionExpression: BpmnBusinessObject | undefined): string | undefined {
-  if (!conditionExpression) {
-    return undefined;
-  }
-
-  return (
-    (conditionExpression.body as string | undefined) ??
-    (conditionExpression.$body as string | undefined) ??
-    (conditionExpression.textContent as string | undefined)
-  );
 }

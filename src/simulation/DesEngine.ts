@@ -397,6 +397,8 @@ export class DesEngine {
   }
 
   private routeOutgoing(token: Token, node: SimNode, time: number): void {
+    const caseState = this.tokens.getCase(token.caseId);
+
     const flowIds = this.interpreter.getOutgoingFlowIds(node, this.random, (entry) => {
       if (entry.level === 'warning') {
         this.statistics.warn(entry.message, entry.elementId, entry.time ?? time);
@@ -406,7 +408,8 @@ export class DesEngine {
         this.statistics.info(entry.message, entry.elementId, entry.time ?? time);
       }
     }, {
-      caseId: token.caseId
+      caseId: token.caseId,
+      outputs: caseState?.outputs
     });
 
     for (const flowId of flowIds) {

@@ -109,6 +109,18 @@ export function readRawSimulationValue(
   return undefined;
 }
 
+export function readConditionExpression(element?: BpmnBusinessObject): string | undefined {
+  const conditionExpression = element?.conditionExpression;
+
+  if (!conditionExpression) {
+    return undefined;
+  }
+
+  return asString(conditionExpression.body) ??
+    asString(conditionExpression.$body) ??
+    asString(conditionExpression.textContent);
+}
+
 export function readResourceCatalog(element?: BpmnBusinessObject): SimulationResource[] {
   const catalog = findExtension(element, RESOURCE_CATALOG_TYPE);
   const resources = catalog?.resources as BpmnBusinessObject[] | undefined;

@@ -26,6 +26,59 @@ test('XOR gateway uses default flow when conditions are present and none evaluat
   assert.match(logs[0].message, /bedingte Sequence Flows/);
 });
 
+test('XOR gateway selects the first JavaScript condition that evaluates true', () => {
+  const model = createXorModel({
+    defaultFlowId: 'flow_default',
+    flows: [
+      flow('flow_condition_a', 0.1, true, 'status === "manual"'),
+      flow('flow_condition_b', 0.8, true, 'status === "ok"'),
+      flow('flow_default', 0.1, false)
+    ]
+  });
+  const logs: SimulationLogEntry[] = [];
+  const interpreter = new BpmnSimulationInterpreter(model);
+
+  const selected = interpreter.getOutgoingFlowIds(
+    model.nodes.get('xor') as SimNode,
+    new SeededRandom(3),
+    (entry) => logs.push(entry),
+    {
+      outputs: {
+        Task_Check_Order: {
+          status: 'ok'
+        }
+      }
+    }
+  );
+
+  assert.deepEqual(selected, ['flow_condition_b']);
+  assert.ok(logs.some((entry) => entry.message.includes('JavaScript-Ausdruecke')));
+});
+
+test('XOR gateway conditions can access scoped output objects', () => {
+  const model = createXorModel({
+    flows: [
+      flow('flow_priority', 1, true, 'outputs.Task_Check_Order.priority >= 2')
+    ]
+  });
+  const interpreter = new BpmnSimulationInterpreter(model);
+
+  const selected = interpreter.getOutgoingFlowIds(
+    model.nodes.get('xor') as SimNode,
+    new SeededRandom(3),
+    () => undefined,
+    {
+      outputs: {
+        Task_Check_Order: {
+          priority: 3
+        }
+      }
+    }
+  );
+
+  assert.deepEqual(selected, ['flow_priority']);
+});
+
 test('XOR gateway warns and returns no flow without matching condition or default flow', () => {
   const model = createXorModel({
     flows: [flow('flow_condition', 1, true)]
@@ -107,14 +160,19 @@ function createXorModel(options: { flows: SimFlow[]; defaultFlowId?: string }): 
   };
 }
 
-function flow(id: string, probability: number | undefined, hasCondition: boolean): SimFlow {
+function flow(
+  id: string,
+  probability: number | undefined,
+  hasCondition: boolean,
+  conditionExpression = '${approved}'
+): SimFlow {
   return {
     id,
     name: id,
     sourceId: 'xor',
     targetId: `${id}_target`,
     hasCondition,
-    conditionExpression: hasCondition ? '${approved}' : undefined,
+    conditionExpression: hasCondition ? conditionExpression : undefined,
     params: {
       branch: {
         probability

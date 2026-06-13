@@ -88,6 +88,24 @@ test('DES samples output objects for completed tasks', () => {
   });
 });
 
+test('DES routes XOR conditions with variables from previous output objects', () => {
+  const model = createConditionModel();
+
+  const result = new DesEngine(model, {
+    numberOfRuns: 1,
+    randomSeed: 1,
+    animationSpeed: 1,
+    collectTraces: true
+  }).run();
+
+  assert.equal(result.completedCases, 1);
+  assert.deepEqual(result.cases[0].outputs.task, {
+    status: 'ok'
+  });
+  assert.ok(result.cases[0].path.includes('flow_ok'));
+  assert.ok(!result.cases[0].path.includes('flow_default'));
+});
+
 function createLinearModel(): SimModel {
   const nodes: SimNode[] = [
     node('start', 'Start', 'startEvent', ['flow_start_task']),
@@ -110,6 +128,57 @@ function createLinearModel(): SimModel {
   return {
     id: 'process',
     name: 'Process',
+    resources: new Map(),
+    nodes: new Map(nodes.map((item) => [item.id, item])),
+    flows: new Map(flows.map((item) => [item.id, item])),
+    startNodeIds: ['start'],
+    unsupportedElementIds: []
+  };
+}
+
+function createConditionModel(): SimModel {
+  const nodes: SimNode[] = [
+    node('start', 'Start', 'startEvent', ['flow_start_task']),
+    {
+      ...node('task', 'Task', 'userTask', ['flow_task_xor'], ['flow_start_task']),
+      params: {
+        duration: {
+          type: 'fixed',
+          mean: 0
+        },
+        outputObject: {
+          fields: [
+            {
+              key: 'status',
+              type: 'string',
+              generator: 'fixed',
+              value: 'ok'
+            }
+          ]
+        }
+      }
+    },
+    {
+      ...node('xor', 'Decision', 'exclusiveGateway', ['flow_ok', 'flow_default'], ['flow_task_xor']),
+      defaultFlowId: 'flow_default'
+    },
+    node('okEnd', 'OkEnd', 'endEvent', [], ['flow_ok']),
+    node('defaultEnd', 'DefaultEnd', 'endEvent', [], ['flow_default'])
+  ];
+  const flows: SimFlow[] = [
+    flow('flow_start_task', 'start', 'task'),
+    flow('flow_task_xor', 'task', 'xor'),
+    {
+      ...flow('flow_ok', 'xor', 'okEnd'),
+      hasCondition: true,
+      conditionExpression: 'status === "ok"'
+    },
+    flow('flow_default', 'xor', 'defaultEnd')
+  ];
+
+  return {
+    id: 'conditionProcess',
+    name: 'Condition Process',
     resources: new Map(),
     nodes: new Map(nodes.map((item) => [item.id, item])),
     flows: new Map(flows.map((item) => [item.id, item])),

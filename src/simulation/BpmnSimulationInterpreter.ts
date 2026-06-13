@@ -1,5 +1,5 @@
 import type { SimFlow, SimModel, SimNode } from '../types/bpmn';
-import type { SimulationLogEntry } from '../types/simulation';
+import type { CaseOutputValue, SimulationLogEntry } from '../types/simulation';
 import { isTaskKind } from '../bpmn/BpmnElementClassifier';
 import { SeededRandom } from './RandomDistributions';
 
@@ -7,6 +7,7 @@ type Logger = (entry: SimulationLogEntry) => void;
 
 export type ConditionEvaluationContext = {
   caseId?: number;
+  outputs?: Record<string, CaseOutputValue>;
   variables?: Record<string, unknown>;
 };
 
@@ -100,20 +101,26 @@ export class BpmnSimulationInterpreter {
     const conditionalFlows = outgoingFlows.filter((flow) => flow.hasCondition);
 
     if (conditionalFlows.length) {
-      const matched = conditionalFlows.find((flow) => {
-        return this.evaluateCondition(flow.conditionExpression, context);
-      });
-
       if (!this.conditionWarnings.has(node.id)) {
         this.conditionWarnings.add(node.id);
         log({
           level: 'warning',
           message:
             `Gateway "${node.name}" besitzt bedingte Sequence Flows. ` +
-            'Branch-Wahrscheinlichkeiten werden ignoriert; Condition-Evaluation ist vorbereitet und nutzt aktuell einen Stub.',
+            'Branch-Wahrscheinlichkeiten werden ignoriert; Conditions werden als JavaScript-Ausdruecke ausgewertet.',
           elementId: node.id
         });
       }
+
+      const matched = conditionalFlows.find((flow) => {
+        return this.evaluateCondition(flow.conditionExpression, context, (message) => {
+          this.warnOnce(node.id, `condition-error-${flow.id}`, log, {
+            level: 'warning',
+            message: `Condition auf Flow "${flow.name}" konnte nicht ausgewertet werden: ${message}`,
+            elementId: flow.id
+          });
+        });
+      });
 
       if (matched) {
         return [matched.id];
@@ -188,13 +195,39 @@ export class BpmnSimulationInterpreter {
   }
 
   evaluateCondition(
-    _conditionExpression: string | undefined,
-    _context: ConditionEvaluationContext
+    conditionExpression: string | undefined,
+    context: ConditionEvaluationContext = {},
+    onError?: (message: string) => void
   ): boolean {
-    // Prepared extension point: later this will evaluate BPMN FormalExpression
-    // bodies against case variables/outputs. For now the stub deliberately
-    // returns false so Default Flow handling and warnings stay explicit.
-    return false;
+    const expression = normalizeConditionExpression(conditionExpression);
+
+    if (!expression) {
+      return false;
+    }
+
+    const variables = createConditionVariables(context);
+    const outputs = context.outputs ?? {};
+
+    try {
+      const evaluator = new Function(
+        'variables',
+        'outputs',
+        'caseId',
+        `
+          const processVariables = variables;
+          const outputObjects = outputs;
+          const currentCaseId = caseId;
+          with (variables) {
+            ${createEvaluationBody(expression)}
+          }
+        `
+      );
+
+      return Boolean(evaluator(variables, outputs, context.caseId));
+    } catch (error) {
+      onError?.(error instanceof Error ? error.message : String(error));
+      return false;
+    }
   }
 
   private warnOnce(nodeId: string, key: string, log: Logger, entry: SimulationLogEntry): void {
@@ -211,4 +244,50 @@ export class BpmnSimulationInterpreter {
 
 function formatProbability(value: number): string {
   return Math.round(value * 1000) / 1000 + '';
+}
+
+function normalizeConditionExpression(conditionExpression: string | undefined): string | undefined {
+  const expression = conditionExpression?.trim();
+
+  if (!expression) {
+    return undefined;
+  }
+
+  if (expression.startsWith('${') && expression.endsWith('}')) {
+    return stripTrailingSemicolons(expression.slice(2, -1).trim());
+  }
+
+  return stripTrailingSemicolons(expression);
+}
+
+function stripTrailingSemicolons(expression: string): string {
+  return expression.replace(/;+\s*$/, '').trim();
+}
+
+function createEvaluationBody(expression: string): string {
+  if (/^\s*return\b/.test(expression) || expression.includes(';')) {
+    return expression;
+  }
+
+  return `return (${expression});`;
+}
+
+function createConditionVariables(context: ConditionEvaluationContext): Record<string, unknown> {
+  const variables: Record<string, unknown> = {
+    ...(context.variables ?? {})
+  };
+
+  for (const [elementId, value] of Object.entries(context.outputs ?? {})) {
+    variables[elementId] = value;
+
+    if (isRecord(value)) {
+      Object.assign(variables, value);
+    }
+  }
+
+  return variables;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 }

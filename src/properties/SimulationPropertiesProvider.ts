@@ -9,8 +9,18 @@ import {
 import { useService } from 'bpmn-js-properties-panel';
 import { h } from 'preact';
 import { isSimulationEditable, isTaskType, supportsOutputObject } from '../bpmn/BpmnElementClassifier';
-import { readRawSimulationValue, readResourceCatalog, readSimulationConfig } from '../bpmn/ExtensionElementReader';
-import { updateDurationConfig, updateOutputObjectFields, updateSimulationValue } from '../bpmn/ExtensionElementWriter';
+import {
+  readConditionExpression,
+  readRawSimulationValue,
+  readResourceCatalog,
+  readSimulationConfig
+} from '../bpmn/ExtensionElementReader';
+import {
+  updateConditionExpression,
+  updateDurationConfig,
+  updateOutputObjectFields,
+  updateSimulationValue
+} from '../bpmn/ExtensionElementWriter';
 import type { BpmnElement, BpmnFactory, Modeling } from '../types/bpmn';
 import type {
   DurationConfig,
@@ -30,7 +40,14 @@ type EntryDefinition = {
   id: string;
   label: string;
   path: string[];
-  control: 'text' | 'select' | 'checkbox' | 'resourceSelect' | 'outputObjectList' | 'durationDistribution';
+  control:
+    | 'text'
+    | 'select'
+    | 'checkbox'
+    | 'resourceSelect'
+    | 'outputObjectList'
+    | 'durationDistribution'
+    | 'conditionExpression';
   type?: string;
   min?: string;
   max?: string;
@@ -71,6 +88,10 @@ export default class SimulationPropertiesProvider {
 
   getGroups(element: BpmnElement) {
     return (groups: Group[]) => {
+      if (element.businessObject?.$type === 'bpmn:SequenceFlow') {
+        addConditionExpressionToDocumentationGroup(groups, element);
+      }
+
       if (!isSimulationEditable(element.businessObject)) {
         return groups;
       }
@@ -134,6 +155,8 @@ function createEntry(element: BpmnElement, definition: EntryDefinition): Entry {
       ? SimulationOutputObjectList
       : definition.control === 'durationDistribution'
         ? SimulationDurationDistribution
+        : definition.control === 'conditionExpression'
+          ? SimulationConditionExpression
       : definition.control === 'resourceSelect'
       ? SimulationResourceSelect
       : definition.control === 'select'
@@ -146,6 +169,8 @@ function createEntry(element: BpmnElement, definition: EntryDefinition): Entry {
       ? isOutputObjectListEdited
       : definition.control === 'durationDistribution'
         ? isDurationDistributionEdited
+        : definition.control === 'conditionExpression'
+          ? isConditionExpressionEdited
       : definition.control === 'select' || definition.control === 'resourceSelect'
       ? isSelectEntryEdited
       : definition.control === 'checkbox'
@@ -158,6 +183,25 @@ function createEntry(element: BpmnElement, definition: EntryDefinition): Entry {
     component,
     isEdited
   };
+}
+
+function addConditionExpressionToDocumentationGroup(groups: Group[], element: BpmnElement): void {
+  const entry = createEntry(element, conditionExpressionEntry());
+  const documentationGroup = groups.find((group) => group.id === 'documentation');
+
+  if (documentationGroup) {
+    if (!documentationGroup.entries.some((item) => item.id === entry.id)) {
+      documentationGroup.entries.push(entry);
+    }
+
+    return;
+  }
+
+  groups.push({
+    id: 'documentation',
+    label: 'Documentation',
+    entries: [entry]
+  });
 }
 
 function SimulationTextField(props: Entry): unknown {
@@ -179,6 +223,23 @@ function SimulationTextField(props: Entry): unknown {
       updateSimulationValue(props.element, getConfigKind(props.element), props.path, value, bpmnFactory, modeling);
     },
     validate: props.validate ? validators[props.validate] : undefined
+  });
+}
+
+function SimulationConditionExpression(props: Entry): unknown {
+  const modeling = useService<Modeling>('modeling');
+  const bpmnFactory = useService<BpmnFactory>('bpmnFactory');
+  const debounce = useService('debounceInput');
+
+  return TextFieldEntry({
+    id: props.id,
+    element: props.element,
+    label: props.label,
+    debounce,
+    getValue: () => readConditionExpression(props.element.businessObject) ?? '',
+    setValue: (value: string | undefined) => {
+      updateConditionExpression(props.element, value, bpmnFactory, modeling);
+    }
   });
 }
 
@@ -390,7 +451,7 @@ function renderGeneratorParameters(
           h('input', {
             type: 'text',
             defaultValue: choicesToText(field.choices),
-            placeholder: 'ok:0.8|manual:0.2',
+            placeholder: 'a:0.34|b:0.33|c:0.33',
             onInput: (event: Event) => update({ choices: textToChoices((event.currentTarget as HTMLInputElement).value) }),
             onChange: (event: Event) => update({ choices: textToChoices((event.currentTarget as HTMLInputElement).value) }),
             onBlur: (event: Event) => update({ choices: textToChoices((event.currentTarget as HTMLInputElement).value) })
@@ -410,10 +471,10 @@ function renderGeneratorParameters(
     return [
       h('label', null, [
         h('span', null, 'Werte'),
-        h('input', {
-          type: 'text',
-          defaultValue: choicesToText(field.choices),
-          placeholder: '1:0.5|2:0.5',
+          h('input', {
+            type: 'text',
+            defaultValue: choicesToText(field.choices),
+          placeholder: '1:0.34|2:0.33|3:0.33',
           onInput: (event: Event) => update({ choices: textToChoices((event.currentTarget as HTMLInputElement).value) }),
           onChange: (event: Event) => update({ choices: textToChoices((event.currentTarget as HTMLInputElement).value) }),
           onBlur: (event: Event) => update({ choices: textToChoices((event.currentTarget as HTMLInputElement).value) })
@@ -465,6 +526,12 @@ function isDurationDistributionEdited(...args: unknown[]): boolean {
   const props = args[1] as Entry | undefined;
 
   return Boolean(props?.element && readSimulationConfig(props.element.businessObject).duration);
+}
+
+function isConditionExpressionEdited(...args: unknown[]): boolean {
+  const props = args[1] as Entry | undefined;
+
+  return Boolean(props?.element && readConditionExpression(props.element.businessObject));
 }
 
 const DURATION_DISTRIBUTION_OPTIONS: Array<{ label: string; value: DurationDistributionType }> = [
@@ -548,7 +615,7 @@ function setGeneratorDefaults(field: OutputFieldConfig, generator: OutputGenerat
     return {
       ...field,
       generator,
-      choices: field.choices?.length ? field.choices : [{ value: field.type === 'string' ? 'ok' : '1', probability: 1 }],
+      choices: field.choices?.length ? field.choices : createDefaultChoices(field.type),
       value: undefined
     };
   }
@@ -584,6 +651,15 @@ function setGeneratorDefaults(field: OutputFieldConfig, generator: OutputGenerat
     mode: generator === 'triangular' ? field.mode ?? field.mean ?? 5 : field.mode,
     lambda: generator === 'exponential' ? field.lambda ?? 1 : field.lambda
   };
+}
+
+function createDefaultChoices(type: OutputValueType): OutputChoice[] {
+  const values = type === 'string' ? ['a', 'b', 'c'] : ['1', '2', '3'];
+
+  return values.map((value, index) => ({
+    value,
+    probability: index === 0 ? 0.34 : 0.33
+  }));
 }
 
 function normalizeFieldPatch(field: OutputFieldConfig): OutputFieldConfig {
@@ -800,6 +876,15 @@ function textToChoices(value: string): OutputChoice[] | undefined {
     .filter((choice) => choice.value);
 
   return choices.length ? choices : undefined;
+}
+
+function conditionExpressionEntry(): EntryDefinition {
+  return {
+    id: 'condition-expression',
+    label: 'Condition (JS)',
+    path: ['conditionExpression'],
+    control: 'conditionExpression'
+  };
 }
 
 function startEventEntries(): EntryDefinition[] {
