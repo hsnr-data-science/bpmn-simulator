@@ -3,6 +3,7 @@ import type { SimulationConfig, SimulationEvent, Token } from '../types/simulati
 import { BpmnSimulationInterpreter } from './BpmnSimulationInterpreter';
 import { EventQueue } from './EventQueue';
 import { bernoulli, pickWeighted, sampleDuration, sampleInterarrival, SeededRandom } from './RandomDistributions';
+import { addWorkingTime } from './ResourceCalendar';
 import { ResourceManager, type QueuedTask } from './ResourceManager';
 import { SimulationClock } from './SimulationClock';
 import { StatisticsCollector } from './StatisticsCollector';
@@ -292,6 +293,10 @@ export class DesEngine {
     const resourceStart = this.resources.request(node, payload.token, time);
 
     if (!resourceStart.started) {
+      if (resourceStart.delayedUntil !== undefined && resourceStart.delayedUntil > time) {
+        this.queue.schedule('TASK_START', resourceStart.delayedUntil, payload);
+      }
+
       return;
     }
 
@@ -307,7 +312,7 @@ export class DesEngine {
     }
 
     for (const queued of this.resources.release(payload.resourceId)) {
-      this.startQueuedTask(queued, time, payload.resourceId);
+      this.startQueuedTask(queued, time);
     }
 
     const failure = this.sampleFailure(node, payload.token);
@@ -434,9 +439,10 @@ export class DesEngine {
     resourceId?: string
   ): void {
     const serviceTime = sampleDuration(node.params.duration, this.random);
+    const completionTime = addWorkingTime(time, serviceTime, node.params.resource);
 
     this.statistics.recordService(node, time - arrivedAt, serviceTime);
-    this.queue.schedule('TASK_COMPLETE', time + serviceTime, {
+    this.queue.schedule('TASK_COMPLETE', completionTime, {
       token,
       elementId: node.id,
       serviceTime,
@@ -444,8 +450,22 @@ export class DesEngine {
     });
   }
 
-  private startQueuedTask(queued: QueuedTask, time: number, resourceId: string | undefined): void {
-    this.scheduleTaskCompletion(queued.node, queued.token, queued.arrivedAt, time, resourceId);
+  private startQueuedTask(queued: QueuedTask, time: number): void {
+    const resourceStart = this.resources.request(queued.node, queued.token, time);
+
+    if (!resourceStart.started) {
+      if (resourceStart.delayedUntil !== undefined && resourceStart.delayedUntil > time) {
+        this.queue.schedule('TASK_START', resourceStart.delayedUntil, {
+          token: queued.token,
+          elementId: queued.node.id,
+          arrivedAt: queued.arrivedAt
+        });
+      }
+
+      return;
+    }
+
+    this.scheduleTaskCompletion(queued.node, queued.token, queued.arrivedAt, time, resourceStart.resourceId);
   }
 
   private sampleFailure(node: SimNode, token: Token): TaskFailureOutcome {

@@ -1,8 +1,10 @@
 import type { BpmnBusinessObject, BpmnDefinitions, SimFlow, SimModel, SimNode } from '../types/bpmn';
+import type { ElementSimulationConfig, SimulationResource } from '../types/simulation';
 import { classifyBpmnElement } from './BpmnElementClassifier';
-import { readSimulationConfig } from './ExtensionElementReader';
+import { readResourceCatalog, readSimulationConfig } from './ExtensionElementReader';
 
 type BuildContext = {
+  resources: Map<string, SimulationResource>;
   nodes: Map<string, SimNode>;
   flows: Map<string, SimFlow>;
   unsupportedElementIds: string[];
@@ -16,6 +18,7 @@ export function buildBpmnGraph(definitions: BpmnDefinitions): SimModel {
   }
 
   const context: BuildContext = {
+    resources: new Map(readResourceCatalog(process).map((resource) => [resource.id, resource])),
     nodes: new Map(),
     flows: new Map(),
     unsupportedElementIds: []
@@ -34,6 +37,7 @@ export function buildBpmnGraph(definitions: BpmnDefinitions): SimModel {
   return {
     id: process.id ?? 'Process',
     name: process.name ?? process.id ?? 'BPMN Process',
+    resources: context.resources,
     nodes: context.nodes,
     flows: context.flows,
     startNodeIds,
@@ -82,6 +86,8 @@ function addNode(
     context.unsupportedElementIds.push(element.id);
   }
 
+  const params = resolveResourceConfig(readSimulationConfig(element), context.resources);
+
   context.nodes.set(element.id, {
     id: element.id,
     name: element.name ?? element.id,
@@ -89,7 +95,7 @@ function addNode(
     kind: classification.kind,
     incoming: toIds(element.incoming),
     outgoing: toIds(element.outgoing),
-    params: readSimulationConfig(element),
+    params,
     supported: classification.supported,
     parentSubProcessId,
     subProcessStartIds: childStartIds,
@@ -100,6 +106,37 @@ function addNode(
   if (childFlowElements.length) {
     addFlowElements(childFlowElements, context, element.id);
   }
+}
+
+function resolveResourceConfig(
+  params: ElementSimulationConfig,
+  resources: Map<string, SimulationResource>
+): ElementSimulationConfig {
+  const taskResource = params.resource;
+  const resourceId = taskResource?.resourceId;
+
+  if (!resourceId) {
+    return params;
+  }
+
+  const resource = resources.get(resourceId);
+
+  if (!resource) {
+    return params;
+  }
+
+  return {
+    ...params,
+    resource: {
+      ...taskResource,
+      resourceId,
+      resourceName: resource.name,
+      capacity: resource.capacity ?? taskResource.capacity,
+      calendar: resource.calendar ?? taskResource.calendar,
+      weekdays: resource.weekdays ?? taskResource.weekdays,
+      hourRanges: resource.hourRanges ?? taskResource.hourRanges
+    }
+  };
 }
 
 function addFlow(element: BpmnBusinessObject, context: BuildContext): void {

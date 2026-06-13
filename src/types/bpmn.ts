@@ -1,4 +1,4 @@
-import type { ElementSimulationConfig } from './simulation';
+import type { ElementSimulationConfig, SimulationResource } from './simulation';
 
 export type BpmnBusinessObject = {
   $type?: string;
@@ -88,6 +88,7 @@ export type SimFlow = {
 export type SimModel = {
   id: string;
   name: string;
+  resources: Map<string, SimulationResource>;
   nodes: Map<string, SimNode>;
   flows: Map<string, SimFlow>;
   startNodeIds: string[];

@@ -10,14 +10,22 @@ import type {
   PossibleOutput,
   ResourceConfig,
   SequenceFlowSimulationConfig,
+  SimulationResource,
   StartEventSimulationConfig,
   TaskSimulationConfig
 } from '../types/simulation';
+import {
+  normalizeResourceSchedule,
+  parseHourRanges,
+  parseLegacyCalendar,
+  parseWeekdays
+} from '../simulation/ResourceCalendar';
 
 export const SIM_NS_URI = 'https://hsnr.de/data-science/bpmn/simulation';
 export const TASK_CONFIG_TYPE = 'sim:TaskConfig';
 export const START_EVENT_CONFIG_TYPE = 'sim:StartEventConfig';
 export const SEQUENCE_FLOW_CONFIG_TYPE = 'sim:SequenceFlowConfig';
+export const RESOURCE_CATALOG_TYPE = 'sim:ResourceCatalog';
 export const LEGACY_CONFIG_TYPE = 'sim:SimulationParameters';
 
 export function readSimulationConfig(element?: BpmnBusinessObject): ElementSimulationConfig {
@@ -102,6 +110,19 @@ export function readRawSimulationValue(
   return undefined;
 }
 
+export function readResourceCatalog(element?: BpmnBusinessObject): SimulationResource[] {
+  const catalog = findExtension(element, RESOURCE_CATALOG_TYPE);
+  const resources = catalog?.resources as BpmnBusinessObject[] | undefined;
+
+  if (!resources?.length) {
+    return [];
+  }
+
+  return resources
+    .map(readCatalogResource)
+    .filter((resource): resource is SimulationResource => Boolean(resource));
+}
+
 export function findExtension(
   element: BpmnBusinessObject | undefined,
   type: string
@@ -132,8 +153,35 @@ function readResource(element?: BpmnBusinessObject): ResourceConfig | undefined 
 
   return {
     resourceId: asString(element.id),
+    resourceName: asString(element.name),
     capacity: asInteger(element.capacity),
-    calendar: asString(element.calendar)
+    calendar: asString(element.calendar),
+    weekdays: parseWeekdays(asString(element.weekdays)),
+    hourRanges: parseHourRanges(asString(element.hourRanges))
+  };
+}
+
+function readCatalogResource(element?: BpmnBusinessObject): SimulationResource | undefined {
+  const id = asString(element?.id);
+
+  if (!id) {
+    return undefined;
+  }
+
+  const schedule = normalizeResourceSchedule({
+    calendar: asString(element?.calendar),
+    weekdays: parseWeekdays(asString(element?.weekdays)),
+    hourRanges: parseHourRanges(asString(element?.hourRanges))
+  });
+  const legacy = parseLegacyCalendar(asString(element?.calendar));
+
+  return {
+    id,
+    name: asString(element?.name) ?? id,
+    capacity: asInteger(element?.capacity),
+    calendar: schedule.calendar,
+    weekdays: schedule.weekdays ?? legacy.weekdays,
+    hourRanges: schedule.hourRanges ?? legacy.hourRanges
   };
 }
 

@@ -18,7 +18,8 @@ body {
 }
 
 button,
-input {
+input,
+select {
   font: inherit;
 }
 
@@ -82,6 +83,11 @@ input {
 
 .icon-button {
   width: 36px;
+}
+
+.compact-button {
+  width: 30px;
+  height: 30px;
 }
 
 .primary-button {
@@ -202,7 +208,8 @@ input {
 }
 
 .rank-list,
-.warning-list {
+.warning-list,
+.resource-list {
   display: grid;
   gap: 6px;
   margin: 0;
@@ -213,6 +220,117 @@ input {
 .event-log-list {
   max-height: 220px;
   overflow: auto;
+}
+
+.resource-row {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid #dce2df;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.resource-row-header {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+}
+
+.resource-row-header strong {
+  overflow: hidden;
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.resource-row > label {
+  display: grid;
+  grid-template-columns: 86px minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+}
+
+.resource-calendar-block {
+  display: grid;
+  gap: 6px;
+}
+
+.resource-row > label > span,
+.resource-calendar-block > span {
+  color: #68716d;
+  font-size: 11px;
+  text-transform: uppercase;
+}
+
+.resource-row > label input {
+  min-width: 0;
+  width: 100%;
+  height: 30px;
+  padding: 4px 8px;
+  border: 1px solid #c4ccc8;
+  border-radius: 6px;
+  color: #202329;
+  background: #fbfcfb;
+}
+
+.weekday-selector,
+.hour-selector {
+  display: grid;
+  gap: 4px;
+}
+
+.weekday-selector {
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+}
+
+.hour-selector {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.calendar-chip {
+  position: relative;
+  display: block;
+  min-width: 0;
+}
+
+.calendar-chip input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.calendar-chip span {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  min-height: 28px;
+  padding: 4px 5px;
+  border: 1px solid #c4ccc8;
+  border-radius: 6px;
+  color: #3f4945;
+  background: #fbfcfb;
+  font-size: 11px;
+  line-height: 1.1;
+  text-transform: none;
+  cursor: pointer;
+}
+
+.calendar-chip input:checked + span {
+  border-color: #16796b;
+  color: #0f443b;
+  background: #e6f4f1;
+  font-weight: 700;
+}
+
+.calendar-chip input:focus-visible + span {
+  outline: 2px solid #16796b;
+  outline-offset: 2px;
 }
 
 .rank-list li,

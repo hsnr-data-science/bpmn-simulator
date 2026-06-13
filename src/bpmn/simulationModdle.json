@@ -36,8 +36,18 @@
       "superClass": ["Element"],
       "properties": [
         { "name": "id", "type": "String", "isAttr": true },
+        { "name": "name", "type": "String", "isAttr": true },
         { "name": "capacity", "type": "String", "isAttr": true },
+        { "name": "weekdays", "type": "String", "isAttr": true },
+        { "name": "hourRanges", "type": "String", "isAttr": true },
         { "name": "calendar", "type": "String", "isAttr": true }
+      ]
+    },
+    {
+      "name": "ResourceCatalog",
+      "superClass": ["Element"],
+      "properties": [
+        { "name": "resources", "type": "Resource", "isMany": true }
       ]
     },
     {

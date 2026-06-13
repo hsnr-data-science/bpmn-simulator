@@ -8,6 +8,14 @@ export const defaultDiagram = `<?xml version="1.0" encoding="UTF-8"?>
   id="Definitions_DES_Demo"
   targetNamespace="https://example.com/bpmn-des-simulator">
   <bpmn:process id="Process_Order_Fulfillment" name="Order Fulfillment DES Demo" isExecutable="false">
+    <bpmn:extensionElements>
+      <sim:resourceCatalog>
+        <sim:resource id="Clerks" name="Clerks" capacity="2" weekdays="1,2,3,4,5" hourRanges="8-17" calendar="Mo-Fr 08:00-17:00" />
+        <sim:resource id="Warehouse" name="Warehouse Team" capacity="3" weekdays="1,2,3,4,5" hourRanges="6-20" calendar="Mo-Fr 06:00-20:00" />
+        <sim:resource id="Procurement" name="Procurement" capacity="1" weekdays="1,2,3,4,5" hourRanges="9-16" calendar="Mo-Fr 09:00-16:00" />
+        <sim:resource id="Shipping" name="Shipping Desk" capacity="2" weekdays="1,2,3,4,5" hourRanges="7-18" calendar="Mo-Fr 07:00-18:00" />
+      </sim:resourceCatalog>
+    </bpmn:extensionElements>
     <bpmn:startEvent id="StartEvent_Order" name="Order received">
       <bpmn:extensionElements>
         <sim:startEventConfig>
@@ -20,7 +28,7 @@ export const defaultDiagram = `<?xml version="1.0" encoding="UTF-8"?>
       <bpmn:extensionElements>
         <sim:taskConfig>
           <sim:duration type="triangular" min="2" mode="4" max="8" />
-          <sim:resource id="Clerks" capacity="2" />
+          <sim:resource id="Clerks" />
           <sim:failure probability="0.02" retryCount="1">
             <sim:retryDelay type="fixed" mean="1" />
           </sim:failure>
@@ -38,7 +46,7 @@ export const defaultDiagram = `<?xml version="1.0" encoding="UTF-8"?>
       <bpmn:extensionElements>
         <sim:taskConfig>
           <sim:duration type="normal" mean="6" stddev="1.5" min="1" />
-          <sim:resource id="Warehouse" capacity="3" />
+          <sim:resource id="Warehouse" />
           <sim:failure probability="0.03" retryCount="2">
             <sim:retryDelay type="fixed" mean="2" />
           </sim:failure>
@@ -59,7 +67,7 @@ export const defaultDiagram = `<?xml version="1.0" encoding="UTF-8"?>
       <bpmn:extensionElements>
         <sim:taskConfig>
           <sim:duration type="uniform" min="12" max="36" />
-          <sim:resource id="Procurement" capacity="1" />
+          <sim:resource id="Procurement" />
           <sim:failure probability="0.01" retryCount="0" />
         </sim:taskConfig>
       </bpmn:extensionElements>
@@ -70,7 +78,7 @@ export const defaultDiagram = `<?xml version="1.0" encoding="UTF-8"?>
       <bpmn:extensionElements>
         <sim:taskConfig>
           <sim:duration type="triangular" min="3" mode="5" max="12" />
-          <sim:resource id="Shipping" capacity="2" />
+          <sim:resource id="Shipping" />
           <sim:failure probability="0.02" retryCount="1">
             <sim:retryDelay type="fixed" mean="2" />
           </sim:failure>

@@ -1,12 +1,23 @@
 import BpmnModeler from 'bpmn-js/lib/Modeler';
 import TokenSimulationModule from 'bpmn-js-token-simulation';
 import { BpmnPropertiesPanelModule, BpmnPropertiesProviderModule } from 'bpmn-js-properties-panel';
-import { createIcons, Download, FileJson, FilePlus, Pause, Play, RefreshCcw, RotateCcw, SkipForward, Square, Upload } from 'lucide';
+import { createIcons, Download, FileJson, FilePlus, Pause, Play, Plus, RefreshCcw, RotateCcw, SkipForward, Square, Trash2, Upload } from 'lucide';
 import { buildBpmnGraph } from '../bpmn/BpmnGraphBuilder';
 import { defaultDiagram } from '../bpmn/defaultDiagram';
+import { readResourceCatalog } from '../bpmn/ExtensionElementReader';
+import { updateResourceCatalog } from '../bpmn/ExtensionElementWriter';
 import simulationModdle from '../bpmn/simulationModdle.json';
+import {
+  DEFAULT_HOUR_RANGES,
+  DEFAULT_WEEKDAYS,
+  hoursToRanges,
+  normalizeResourceSchedule,
+  rangesToHours,
+  WEEKDAY_OPTIONS
+} from '../simulation/ResourceCalendar';
 import { SimulationRunner } from '../simulation/SimulationRunner';
-import type { ElementMetrics, SimulationResult } from '../types/simulation';
+import type { BpmnBusinessObject, BpmnDefinitions, BpmnElement, BpmnFactory, Modeling } from '../types/bpmn';
+import type { ElementMetrics, SimulationResource, SimulationResult, Weekday } from '../types/simulation';
 import { SimulationPropertiesProviderModule } from '../properties/SimulationPropertiesProvider';
 import { HeatmapOverlayManager } from '../visualization/HeatmapOverlayManager';
 import { SimulationLogPanel } from '../visualization/SimulationLogPanel';
@@ -16,6 +27,7 @@ type Canvas = {
   zoom(mode: string): void;
   addMarker(elementId: string, marker: string): void;
   removeMarker(elementId: string, marker: string): void;
+  getRootElement(): BpmnElement;
 };
 
 type Overlays = ConstructorParameters<typeof HeatmapOverlayManager>[0];
@@ -36,6 +48,7 @@ type AppElements = {
   resetSimulation: HTMLButtonElement;
   monteCarlo: HTMLButtonElement;
   clearOverlays: HTMLButtonElement;
+  addResource: HTMLButtonElement;
   exportJson: HTMLButtonElement;
   exportCsv: HTMLButtonElement;
   exportXes: HTMLButtonElement;
@@ -49,6 +62,7 @@ type AppElements = {
   metricFailed: HTMLElement;
   metricAvgCycle: HTMLElement;
   metricP90Cycle: HTMLElement;
+  resourceList: HTMLElement;
   bottleneckList: HTMLOListElement;
   pathList: HTMLOListElement;
   statsTable: HTMLTableSectionElement;
@@ -183,6 +197,50 @@ export class ModelerApp {
       this.heatmapOverlays.clear();
       this.setStatus('Overlays zurueckgesetzt');
     });
+
+    this.elements.addResource.addEventListener('click', () => {
+      this.addResource();
+    });
+
+    this.elements.resourceList.addEventListener('input', (event) => {
+      if ((event.target as HTMLInputElement).type === 'checkbox') {
+        return;
+      }
+
+      this.persistResources(this.readResourcesFromEditor());
+      this.setStatus('Ressourcen gespeichert');
+    });
+
+    this.elements.resourceList.addEventListener('change', (event) => {
+      const target = event.target as HTMLInputElement;
+
+      if (target.type === 'checkbox') {
+        ensureAtLeastOneSelection(target);
+      }
+
+      this.persistResources(this.readResourcesFromEditor());
+      this.setStatus('Ressourcen gespeichert');
+    });
+
+    this.elements.resourceList.addEventListener('click', (event) => {
+      const button = (event.target as Element).closest<HTMLButtonElement>('[data-action="remove-resource"]');
+
+      if (!button) {
+        return;
+      }
+
+      const index = Number(button.dataset.index);
+      const resources = this.readResourcesFromEditor();
+
+      if (!Number.isInteger(index) || index < 0 || index >= resources.length) {
+        return;
+      }
+
+      resources.splice(index, 1);
+      this.persistResources(resources);
+      this.renderResources(resources);
+      this.setStatus('Ressource entfernt');
+    });
   }
 
   private exportResult(kind: 'json' | 'csv' | 'xes'): void {
@@ -211,6 +269,7 @@ export class ModelerApp {
       this.lastResult = undefined;
       this.setExportButtons(false);
       this.renderEmptyResults();
+      this.renderResources();
       this.setStatus('Diagramm geladen');
     } catch (error) {
       this.setStatus(error instanceof Error ? error.message : 'Import fehlgeschlagen');
@@ -249,6 +308,70 @@ export class ModelerApp {
     this.elements.statsTable.replaceChildren();
     this.eventLogPanel.render([]);
     this.warningPanel.render([]);
+  }
+
+  private addResource(): void {
+    const resources = this.readResourcesFromModel();
+    const nextIndex = getNextResourceIndex(resources);
+
+    resources.push({
+      id: `Resource_${nextIndex}`,
+      name: `Resource ${nextIndex}`,
+      capacity: 1,
+      weekdays: [...DEFAULT_WEEKDAYS],
+      hourRanges: [...DEFAULT_HOUR_RANGES],
+      calendar: 'Mo-Fr 08:00-17:00'
+    });
+
+    this.persistResources(resources);
+    this.renderResources(resources);
+    this.setStatus('Ressource hinzugefuegt');
+  }
+
+  private renderResources(resources = this.readResourcesFromModel()): void {
+    this.elements.resourceList.replaceChildren(
+      ...resources.map((resource, index) => createResourceRow(resource, index))
+    );
+    createAppIcons();
+  }
+
+  private readResourcesFromModel(): SimulationResource[] {
+    const process = this.getProcess();
+
+    return readResourceCatalog(process);
+  }
+
+  private readResourcesFromEditor(): SimulationResource[] {
+    return [...this.elements.resourceList.querySelectorAll<HTMLElement>('.resource-row')]
+      .map((row) => ({
+        id: readResourceField(row, 'id'),
+        name: readResourceField(row, 'name'),
+        capacity: readPositiveIntegerField(row, 'capacity'),
+        weekdays: readSelectedWeekdays(row),
+        hourRanges: hoursToRanges(readSelectedHours(row))
+      }));
+  }
+
+  private persistResources(resources: SimulationResource[]): void {
+    const process = this.getProcess();
+
+    if (!process) {
+      return;
+    }
+
+    updateResourceCatalog(
+      this.canvas.getRootElement(),
+      process,
+      resources,
+      this.modeler.get<BpmnFactory>('bpmnFactory'),
+      this.modeler.get<Modeling>('modeling')
+    );
+  }
+
+  private getProcess(): BpmnBusinessObject | undefined {
+    const definitions = this.modeler.getDefinitions() as BpmnDefinitions;
+
+    return definitions.rootElements?.find((root) => root.$type === 'bpmn:Process');
   }
 
   private renderResults(result: SimulationResult): void {
@@ -343,6 +466,7 @@ export class ModelerApp {
       resetSimulation: getElement('reset-simulation'),
       monteCarlo: getElement('monte-carlo'),
       clearOverlays: getElement('clear-overlays'),
+      addResource: getElement('add-resource'),
       exportJson: getElement('export-json'),
       exportCsv: getElement('export-csv'),
       exportXes: getElement('export-xes'),
@@ -356,6 +480,7 @@ export class ModelerApp {
       metricFailed: getElement('metric-failed'),
       metricAvgCycle: getElement('metric-avg-cycle'),
       metricP90Cycle: getElement('metric-p90-cycle'),
+      resourceList: getElement('resource-list'),
       bottleneckList: getElement('bottleneck-list'),
       pathList: getElement('path-list'),
       statsTable: getElement('stats-table'),
@@ -463,6 +588,15 @@ function createShellMarkup(): string {
           </div>
           <section class="panel-section">
             <div class="section-title">
+              <h2>Resources</h2>
+              <button id="add-resource" class="icon-button compact-button" title="Ressource hinzufuegen" aria-label="Ressource hinzufuegen">
+                <i data-lucide="plus"></i>
+              </button>
+            </div>
+            <div id="resource-list" class="resource-list"></div>
+          </section>
+          <section class="panel-section">
+            <div class="section-title">
               <h2>Bottlenecks</h2>
             </div>
             <ol id="bottleneck-list" class="rank-list"></ol>
@@ -523,10 +657,12 @@ function createAppIcons(): void {
       FilePlus,
       Pause,
       Play,
+      Plus,
       RefreshCcw,
       RotateCcw,
       SkipForward,
       Square,
+      Trash2,
       Upload
     }
   });
@@ -572,6 +708,125 @@ function formatNumber(value: number): string {
   }
 
   return value.toFixed(2);
+}
+
+function createResourceRow(resource: SimulationResource, index: number): HTMLElement {
+  const row = document.createElement('article');
+  const schedule = normalizeResourceSchedule(resource, 'businessHours');
+
+  row.className = 'resource-row';
+  row.dataset.index = String(index);
+  row.innerHTML = `
+    <div class="resource-row-header">
+      <strong>${escapeHtml(resource.name || resource.id)}</strong>
+      <button class="icon-button compact-button" type="button" title="Ressource entfernen" aria-label="Ressource entfernen" data-action="remove-resource" data-index="${index}">
+        <i data-lucide="trash-2"></i>
+      </button>
+    </div>
+    <label>
+      <span>ID</span>
+      <input data-field="id" type="text" value="${escapeHtml(resource.id)}" />
+    </label>
+    <label>
+      <span>Name</span>
+      <input data-field="name" type="text" value="${escapeHtml(resource.name)}" />
+    </label>
+    <label>
+      <span>Capacity</span>
+      <input data-field="capacity" type="number" min="1" step="1" value="${resource.capacity ?? 1}" />
+    </label>
+    <div class="resource-calendar-block">
+      <span>Days</span>
+      <div class="weekday-selector">
+        ${createWeekdaySelector(schedule.weekdays)}
+      </div>
+    </div>
+    <div class="resource-calendar-block">
+      <span>Hours</span>
+      <div class="hour-selector">
+        ${createHourSelector(schedule.hourRanges)}
+      </div>
+    </div>
+  `;
+
+  return row;
+}
+
+function readResourceField(row: HTMLElement, field: keyof SimulationResource): string {
+  const input = row.querySelector<HTMLInputElement>(`input[data-field="${field}"]`);
+
+  return input?.value.trim() ?? '';
+}
+
+function readPositiveIntegerField(row: HTMLElement, field: string): number | undefined {
+  const input = row.querySelector<HTMLInputElement>(`input[data-field="${field}"]`);
+  const value = Number(input?.value);
+
+  return Number.isInteger(value) && value > 0 ? value : undefined;
+}
+
+function createWeekdaySelector(selectedWeekdays = DEFAULT_WEEKDAYS): string {
+  const selected = new Set(selectedWeekdays);
+
+  return WEEKDAY_OPTIONS
+    .map((day) => `
+      <label class="calendar-chip">
+        <input data-field="weekday" type="checkbox" value="${day.value}" ${selected.has(day.value) ? 'checked' : ''} />
+        <span>${day.label}</span>
+      </label>
+    `)
+    .join('');
+}
+
+function createHourSelector(selectedRanges = DEFAULT_HOUR_RANGES): string {
+  const selected = new Set(rangesToHours(selectedRanges));
+
+  return Array.from({ length: 24 }, (_, hour) => `
+    <label class="calendar-chip hour-chip">
+      <input data-field="hour" type="checkbox" value="${hour}" ${selected.has(hour) ? 'checked' : ''} />
+      <span>${formatHourLabel(hour)}</span>
+    </label>
+  `).join('');
+}
+
+function readSelectedWeekdays(row: HTMLElement): Weekday[] {
+  return [...row.querySelectorAll<HTMLInputElement>('input[data-field="weekday"]:checked')]
+    .map((input) => Number(input.value) as Weekday);
+}
+
+function readSelectedHours(row: HTMLElement): number[] {
+  return [...row.querySelectorAll<HTMLInputElement>('input[data-field="hour"]:checked')]
+    .map((input) => Number(input.value));
+}
+
+function ensureAtLeastOneSelection(target: HTMLInputElement): void {
+  const row = target.closest<HTMLElement>('.resource-row');
+  const field = target.dataset.field;
+
+  if (!row || (field !== 'weekday' && field !== 'hour')) {
+    return;
+  }
+
+  const checked = row.querySelectorAll<HTMLInputElement>(`input[data-field="${field}"]:checked`);
+
+  if (!checked.length) {
+    target.checked = true;
+  }
+}
+
+function formatHourLabel(hour: number): string {
+  return `${String(hour).padStart(2, '0')}-${String(hour + 1).padStart(2, '0')}`;
+}
+
+function getNextResourceIndex(resources: SimulationResource[]): number {
+  const used = new Set(resources.map((resource) => resource.id));
+  let index = resources.length + 1;
+
+  while (used.has(`Resource_${index}`)) {
+    index += 1;
+  }
+
+  return index;
 }
 
 function download(fileName: string, content: string, mimeType: string): void {

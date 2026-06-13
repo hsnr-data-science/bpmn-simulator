@@ -62,10 +62,24 @@ src/
 Die Parameter werden im BPMN XML unter `bpmn:extensionElements` gespeichert:
 
 ```xml
+<bpmn:process id="Process_Order_Fulfillment" name="Order Fulfillment DES Demo">
+  <bpmn:extensionElements>
+    <sim:resourceCatalog>
+      <sim:resource
+        id="clerk"
+        name="Clerk Team"
+        capacity="2"
+        weekdays="1,2,3,4,5"
+        hourRanges="8-17"
+        calendar="Mo-Fr 08:00-17:00" />
+    </sim:resourceCatalog>
+  </bpmn:extensionElements>
+</bpmn:process>
+
 <bpmn:extensionElements>
   <sim:taskConfig>
     <sim:duration type="normal" mean="10" stddev="2" />
-    <sim:resource id="clerk" capacity="2" />
+    <sim:resource id="clerk" />
     <sim:failure probability="0.02" retryCount="2">
       <sim:retryDelay type="fixed" mean="1" />
     </sim:failure>
@@ -75,10 +89,14 @@ Die Parameter werden im BPMN XML unter `bpmn:extensionElements` gespeichert:
 
 Editierbar im Properties Panel sind:
 
-- Tasks: Dauerverteilung `fixed`, `uniform`, `normal`, `exponential`, `triangular`, Ressourcen-ID, Kapazität, Kalender, Fehlerwahrscheinlichkeit, Retry-Anzahl und Retry-Delay.
+- Tasks: Dauerverteilung `fixed`, `uniform`, `normal`, `exponential`, `triangular`, Ressourcenauswahl per Dropdown, Fehlerwahrscheinlichkeit, Retry-Anzahl und Retry-Delay.
 - Service Tasks: stochastische Outputs, Output-Verteilung, Fehlerwahrscheinlichkeit und mögliche Fehlercodes.
 - Sequence Flows: Branch-Wahrscheinlichkeit für XOR-Gateways ohne Bedingungen.
 - Start Events: Ankunftsverteilung, Intervall-/Mittelwert-/Schedule-Felder und Anzahl der Cases.
+
+Globale Ressourcen werden in einem eigenen Ressourcenbereich der Anwendung gepflegt. Jede Ressource besitzt ID, Name, Kapazität und Verfügbarkeitskalender/Arbeitszeiten. Tasks speichern nur die Resource-ID als Referenz; Kapazität und Kalender werden beim Aufbau des Simulationsmodells aus dem globalen Katalog aufgelöst.
+
+Arbeitszeiten werden strukturiert gespeichert: `weekdays` nutzt `1=Montag` bis `7=Sonntag`, `hourRanges` nutzt stundenweise Bereiche von `0` bis `24`, z. B. `8-12,13-17`. Das lesbare `calendar`-Attribut bleibt als Zusammenfassung und Legacy-Fallback erhalten. In der Simulation gilt `t=0` als Montag 00:00; Ressourcen starten Tasks nur innerhalb ihrer Arbeitszeiten, und Bearbeitungszeit zählt als Arbeitszeit über Kalendergrenzen hinweg weiter.
 
 ## DES-Kern
 
@@ -135,6 +153,7 @@ Die Oberfläche enthält:
 - BPMN Modeler mit Properties Panel
 - Simulation Control Panel mit Start, Pause, Step, Stop, Reset und Run Monte Carlo
 - Einstellungen für Anzahl Cases, Seed, maximale Simulationszeit und Animationsgeschwindigkeit
+- Ressourcenbereich zum Bearbeiten von ID, Name, Kapazität, Wochentagen und stundenweisen Arbeitszeitbereichen
 - Ergebnisbereich mit Statistik-Tabelle, Event Log, Warnungen und Export Buttons
 
 Die Visualisierung markiert aktive Tokens, aktuelle Task-Ausführungen, abgeschlossene Pfade und Heatmap-Werte nach Häufigkeit, mittlerer Wartezeit und mittlerer Bearbeitungszeit.

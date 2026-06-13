@@ -1,5 +1,6 @@
 import type { SimNode } from '../types/bpmn';
-import type { Token } from '../types/simulation';
+import type { ResourceConfig, Token } from '../types/simulation';
+import { nextResourceAvailability } from './ResourceCalendar';
 
 export type QueuedTask = {
   token: Token;
@@ -10,11 +11,13 @@ export type QueuedTask = {
 export type ResourceStart = {
   started: boolean;
   resourceId?: string;
+  delayedUntil?: number;
 };
 
 type ResourceState = {
   id: string;
   capacity: number;
+  calendar?: ResourceConfig;
   busy: number;
   queue: QueuedTask[];
 };
@@ -27,6 +30,16 @@ export class ResourceManager {
 
     if (!resource) {
       return { started: true };
+    }
+
+    const availableAt = nextResourceAvailability(resource.calendar, time);
+
+    if (availableAt > time) {
+      return {
+        started: false,
+        resourceId: resource.id,
+        delayedUntil: availableAt
+      };
     }
 
     if (resource.busy < resource.capacity) {
@@ -65,14 +78,15 @@ export class ResourceManager {
 
     const released: QueuedTask[] = [];
 
-    while (resource.queue.length && resource.busy < resource.capacity) {
+    const freeSlots = Math.max(0, resource.capacity - resource.busy);
+
+    while (resource.queue.length && released.length < freeSlots) {
       const next = resource.queue.shift();
 
       if (!next) {
         break;
       }
 
-      resource.busy += 1;
       released.push(next);
     }
 
@@ -96,6 +110,7 @@ export class ResourceManager {
     const resource = {
       id: resourceId,
       capacity,
+      calendar: node.params.resource,
       busy: 0,
       queue: []
     };

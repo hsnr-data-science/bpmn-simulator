@@ -99,6 +99,7 @@ function createXorModel(options: { flows: SimFlow[]; defaultFlowId?: string }): 
   return {
     id: 'process',
     name: 'Process',
+    resources: new Map(),
     nodes: new Map([['xor', xor]]),
     flows: new Map(options.flows.map((item) => [item.id, item])),
     startNodeIds: [],

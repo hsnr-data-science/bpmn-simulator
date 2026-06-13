@@ -1,8 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import type { BpmnBusinessObject, BpmnElement } from '../../src/types/bpmn';
-import { readTaskConfig } from '../../src/bpmn/ExtensionElementReader';
-import { updateSimulationValue } from '../../src/bpmn/ExtensionElementWriter';
+import { readResourceCatalog, readTaskConfig } from '../../src/bpmn/ExtensionElementReader';
+import { updateResourceCatalog, updateSimulationValue } from '../../src/bpmn/ExtensionElementWriter';
 
 test('ExtensionElementWriter persists nested task duration and resource config', () => {
   const businessObject: BpmnBusinessObject = {
@@ -48,5 +48,61 @@ test('ExtensionElementWriter persists nested task duration and resource config',
   assert.deepEqual(config.output?.possibleOutputs, [
     { value: 'ok', probability: 0.8 },
     { value: 'manual', probability: 0.2 }
+  ]);
+});
+
+test('ExtensionElementWriter persists the global resource catalog', () => {
+  const process: BpmnBusinessObject = {
+    $type: 'bpmn:Process',
+    id: 'process'
+  };
+  const rootElement: BpmnElement = {
+    id: 'process',
+    businessObject: process
+  };
+  const bpmnFactory = {
+    create(type: string, properties: Record<string, unknown> = {}) {
+      return {
+        $type: type,
+        ...properties
+      };
+    }
+  };
+  const modeling = {
+    updateModdleProperties(
+      _element: BpmnElement,
+      moddleElement: BpmnBusinessObject,
+      properties: Record<string, unknown>
+    ) {
+      Object.assign(moddleElement, properties);
+    }
+  };
+
+  updateResourceCatalog(
+    rootElement,
+    process,
+    [
+      {
+        id: 'clerk',
+        name: 'Clerk Team',
+        capacity: 2,
+        weekdays: [1, 2, 3, 4, 5],
+        hourRanges: [{ start: 8, end: 17 }],
+        calendar: 'Mo-Fr 08:00-17:00'
+      }
+    ],
+    bpmnFactory,
+    modeling
+  );
+
+  assert.deepEqual(readResourceCatalog(process), [
+    {
+      id: 'clerk',
+      name: 'Clerk Team',
+      capacity: 2,
+      weekdays: [1, 2, 3, 4, 5],
+      hourRanges: [{ start: 8, end: 17 }],
+      calendar: 'Mo-Fr 08:00-17:00'
+    }
   ]);
 });

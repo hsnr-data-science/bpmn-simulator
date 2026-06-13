@@ -30,10 +30,29 @@ export type DurationConfig = {
 
 export type RetryDelayConfig = DurationConfig;
 
-export type ResourceConfig = {
-  resourceId?: string;
+export type Weekday = 1 | 2 | 3 | 4 | 5 | 6 | 7;
+
+export type HourRange = {
+  start: number;
+  end: number;
+};
+
+export type SimulationResource = {
+  id: string;
+  name: string;
   capacity?: number;
   calendar?: string;
+  weekdays?: Weekday[];
+  hourRanges?: HourRange[];
+};
+
+export type ResourceConfig = {
+  resourceId?: string;
+  resourceName?: string;
+  capacity?: number;
+  calendar?: string;
+  weekdays?: Weekday[];
+  hourRanges?: HourRange[];
 };
 
 export type FailureConfig = {

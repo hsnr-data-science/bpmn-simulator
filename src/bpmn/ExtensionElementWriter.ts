@@ -1,5 +1,17 @@
 import type { BpmnBusinessObject, BpmnElement, BpmnFactory, Modeling } from '../types/bpmn';
-import { parseWeightedText, SEQUENCE_FLOW_CONFIG_TYPE, START_EVENT_CONFIG_TYPE, TASK_CONFIG_TYPE } from './ExtensionElementReader';
+import type { SimulationResource } from '../types/simulation';
+import {
+  normalizeResourceSchedule,
+  serializeHourRanges,
+  serializeWeekdays
+} from '../simulation/ResourceCalendar';
+import {
+  parseWeightedText,
+  RESOURCE_CATALOG_TYPE,
+  SEQUENCE_FLOW_CONFIG_TYPE,
+  START_EVENT_CONFIG_TYPE,
+  TASK_CONFIG_TYPE
+} from './ExtensionElementReader';
 
 type ConfigKind = 'task' | 'startEvent' | 'sequenceFlow';
 
@@ -34,6 +46,33 @@ export function updateSimulationValue(
   setConfigPath(config, path, value, bpmnFactory);
 
   modeling.updateModdleProperties(element, businessObject, {
+    extensionElements
+  });
+}
+
+export function updateResourceCatalog(
+  element: BpmnElement,
+  process: BpmnBusinessObject,
+  resources: SimulationResource[],
+  bpmnFactory: BpmnFactory,
+  modeling: Modeling
+): void {
+  const extensionElements = ensureExtensionElements(process, bpmnFactory);
+  const catalog = ensureResourceCatalog(extensionElements, bpmnFactory);
+
+  catalog.resources = resources
+    .map(normalizeResource)
+    .filter((resource): resource is SimulationResource => Boolean(resource))
+    .map((resource) => bpmnFactory.create('sim:Resource', {
+      id: resource.id,
+      name: resource.name,
+      capacity: resource.capacity === undefined ? undefined : String(resource.capacity),
+      weekdays: serializeWeekdays(resource.weekdays),
+      hourRanges: serializeHourRanges(resource.hourRanges),
+      calendar: resource.calendar
+    }));
+
+  modeling.updateModdleProperties(element, process, {
     extensionElements
   });
 }
@@ -76,6 +115,25 @@ function ensureConfig(
   return config;
 }
 
+function ensureResourceCatalog(
+  extensionElements: BpmnBusinessObject,
+  bpmnFactory: BpmnFactory
+): BpmnBusinessObject {
+  const existing = extensionElements.values?.find((value) => value.$type === RESOURCE_CATALOG_TYPE);
+
+  if (existing) {
+    return existing;
+  }
+
+  const catalog = bpmnFactory.create(RESOURCE_CATALOG_TYPE, {
+    resources: []
+  });
+
+  extensionElements.values = [...(extensionElements.values ?? []), catalog];
+
+  return catalog;
+}
+
 function setConfigPath(
   config: BpmnBusinessObject,
   path: string[],
@@ -108,6 +166,12 @@ function setConfigPath(
     delete target[attribute];
   } else {
     target[attribute] = value;
+  }
+
+  if (path[0] === 'resource' && path[1] === 'resourceId') {
+    delete target.capacity;
+    delete target.calendar;
+    delete target.name;
   }
 }
 
@@ -178,4 +242,25 @@ function getConfigType(kind: ConfigKind): string {
 
 function capitalize(value: string): string {
   return value.charAt(0).toUpperCase() + value.slice(1);
+}
+
+function normalizeResource(resource: SimulationResource): SimulationResource | undefined {
+  const id = resource.id.trim();
+
+  if (!id) {
+    return undefined;
+  }
+
+  const name = resource.name.trim() || id;
+  const capacity = resource.capacity;
+  const schedule = normalizeResourceSchedule(resource, 'businessHours');
+
+  return {
+    id,
+    name,
+    capacity: capacity === undefined || capacity <= 0 ? undefined : Math.floor(capacity),
+    calendar: schedule.calendar,
+    weekdays: schedule.weekdays,
+    hourRanges: schedule.hourRanges
+  };
 }

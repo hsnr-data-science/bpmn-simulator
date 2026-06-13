@@ -8,7 +8,7 @@ import {
 } from '@bpmn-io/properties-panel';
 import { useService } from 'bpmn-js-properties-panel';
 import { isSimulationEditable, isTaskType } from '../bpmn/BpmnElementClassifier';
-import { readRawSimulationValue } from '../bpmn/ExtensionElementReader';
+import { readRawSimulationValue, readResourceCatalog } from '../bpmn/ExtensionElementReader';
 import { updateSimulationValue } from '../bpmn/ExtensionElementWriter';
 import type { BpmnElement, BpmnFactory, Modeling } from '../types/bpmn';
 import { branchProbabilityEntries } from './entries/BranchProbabilityEntry';
@@ -20,7 +20,7 @@ type EntryDefinition = {
   id: string;
   label: string;
   path: string[];
-  control: 'text' | 'select' | 'checkbox';
+  control: 'text' | 'select' | 'checkbox' | 'resourceSelect';
   type?: string;
   min?: string;
   max?: string;
@@ -43,6 +43,10 @@ type Group = {
 
 type PropertiesPanel = {
   registerProvider(priority: number, provider: SimulationPropertiesProvider): void;
+};
+
+type CanvasWithRoot = {
+  getRootElement(): BpmnElement;
 };
 
 export default class SimulationPropertiesProvider {
@@ -109,13 +113,15 @@ function createEntries(element: BpmnElement): Entry[] {
 
 function createEntry(element: BpmnElement, definition: EntryDefinition): Entry {
   const component =
-    definition.control === 'select'
+    definition.control === 'resourceSelect'
+      ? SimulationResourceSelect
+      : definition.control === 'select'
       ? SimulationSelect
       : definition.control === 'checkbox'
         ? SimulationCheckbox
         : SimulationTextField;
   const isEdited =
-    definition.control === 'select'
+    definition.control === 'select' || definition.control === 'resourceSelect'
       ? isSelectEntryEdited
       : definition.control === 'checkbox'
         ? isCheckboxEntryEdited
@@ -160,6 +166,34 @@ function SimulationSelect(props: Entry): unknown {
     element: props.element,
     label: props.label,
     getOptions: () => props.options ?? [],
+    getValue: () => readRawSimulationValue(props.element.businessObject, props.path) ?? '',
+    setValue: (value: string | undefined) => {
+      updateSimulationValue(props.element, getConfigKind(props.element), props.path, value, bpmnFactory, modeling);
+    }
+  });
+}
+
+function SimulationResourceSelect(props: Entry): unknown {
+  const modeling = useService<Modeling>('modeling');
+  const bpmnFactory = useService<BpmnFactory>('bpmnFactory');
+  const canvas = useService<CanvasWithRoot>('canvas');
+
+  return SelectEntry({
+    id: props.id,
+    element: props.element,
+    label: props.label,
+    getOptions: () => {
+      const process = canvas.getRootElement()?.businessObject;
+      const resources = readResourceCatalog(process);
+
+      return [
+        { label: 'Keine Ressource', value: '' },
+        ...resources.map((resource) => ({
+          label: `${resource.name} (${resource.id})`,
+          value: resource.id
+        }))
+      ];
+    },
     getValue: () => readRawSimulationValue(props.element.businessObject, props.path) ?? '',
     setValue: (value: string | undefined) => {
       updateSimulationValue(props.element, getConfigKind(props.element), props.path, value, bpmnFactory, modeling);

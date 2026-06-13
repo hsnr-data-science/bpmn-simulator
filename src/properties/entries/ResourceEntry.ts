@@ -2,25 +2,9 @@ export function resourceEntries() {
   return [
     {
       id: 'sim-resource-id',
-      label: 'Resource ID',
+      label: 'Resource',
       path: ['resource', 'resourceId'],
-      control: 'text'
-    },
-    {
-      id: 'sim-resource-capacity',
-      label: 'Resource Capacity',
-      path: ['resource', 'capacity'],
-      control: 'text',
-      type: 'number',
-      min: '1',
-      step: '1',
-      validate: 'positiveInteger'
-    },
-    {
-      id: 'sim-resource-calendar',
-      label: 'Resource Calendar',
-      path: ['resource', 'calendar'],
-      control: 'text'
+      control: 'resourceSelect'
     },
     {
       id: 'sim-failure-probability',

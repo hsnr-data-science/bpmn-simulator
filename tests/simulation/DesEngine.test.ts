@@ -16,6 +16,37 @@ test('DES draws fixed task duration and completes the process after that duratio
   assert.equal(result.elementMetrics.find((metric) => metric.elementId === 'task')?.serviceTime, 5);
 });
 
+test('DES uses resource calendars for task start and working-time completion', () => {
+  const model = createLinearModel();
+  const task = model.nodes.get('task');
+
+  if (!task) {
+    throw new Error('task missing');
+  }
+
+  task.params.resource = {
+    resourceId: 'calendar_resource',
+    capacity: 1,
+    weekdays: [1, 2, 3, 4, 5],
+    hourRanges: [{ start: 8, end: 10 }]
+  };
+  task.params.duration = {
+    type: 'fixed',
+    mean: 3
+  };
+
+  const result = new DesEngine(model, {
+    numberOfRuns: 1,
+    randomSeed: 1,
+    animationSpeed: 1,
+    collectTraces: true
+  }).run();
+
+  assert.equal(result.completedCases, 1);
+  assert.equal(result.cases[0].cycleTime, 33);
+  assert.equal(result.elementMetrics.find((metric) => metric.elementId === 'task')?.waitTime, 8);
+});
+
 function createLinearModel(): SimModel {
   const nodes: SimNode[] = [
     node('start', 'Start', 'startEvent', ['flow_start_task']),
@@ -38,6 +69,7 @@ function createLinearModel(): SimModel {
   return {
     id: 'process',
     name: 'Process',
+    resources: new Map(),
     nodes: new Map(nodes.map((item) => [item.id, item])),
     flows: new Map(flows.map((item) => [item.id, item])),
     startNodeIds: ['start'],
