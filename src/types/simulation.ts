@@ -190,6 +190,7 @@ export type ElementMetrics = {
   errors: number;
   retries: number;
   waitTime: number;
+  waitTimeStddev: number;
   serviceTime: number;
   unsupported: boolean;
 };

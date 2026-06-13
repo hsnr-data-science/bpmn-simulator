@@ -179,10 +179,11 @@ Die Oberfläche enthält:
 - BPMN Modeler mit Properties Panel
 - Simulation Control Panel mit Start, Pause, Step, Stop, Reset und Run Monte Carlo
 - Einstellungen für Anzahl Cases, Seed, maximale Simulationszeit und Animationsgeschwindigkeit
+- logarithmischen Speed-Regler mit den Stufen `1`, `10`, `100`, `1000` und `10000`
 - Ressourcenbereich zum Bearbeiten von ID, Name, Kapazität, Wochentagen und stundenweisen Arbeitszeitbereichen
 - Ergebnisbereich mit Statistik-Tabelle, Event Log, Warnungen und Export Buttons
 
-Die Visualisierung markiert aktive Tokens, aktuelle Task-Ausführungen, abgeschlossene Pfade und Heatmap-Werte nach Häufigkeit, mittlerer Wartezeit und mittlerer Bearbeitungszeit.
+Wenn der bpmn-js-token-simulation-Schalter auf AN steht, spielt der obere Start-Button den DES-Lauf als Token-Animation im Diagramm ab. Sequence Flows nutzen dabei die Token-Animation der bpmn-js-Erweiterung; aktive BPMN-Elemente werden zusätzlich mit DES-Tokens und Task-Markierungen hervorgehoben. Die bpmn-js-token-simulation-Popup-Controls fuer Task-Pausen und Gateway-Umschaltungen werden ausgeblendet; Event-Trigger bleiben sichtbar. Waehrend des Abspielens aktualisieren sich Statistik, Task-Wartezeitboxen, Event-/Gateway-Haeufigkeiten, Aktivitaetsfarben und Kantenstaerken fortlaufend.
 
 ## Statistik und Export
 

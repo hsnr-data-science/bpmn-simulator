@@ -68,6 +68,22 @@ select {
   background: #fbfcfb;
 }
 
+.run-controls .speed-control {
+  grid-template-columns: auto 120px 54px;
+}
+
+.run-controls .speed-control input {
+  width: 120px;
+  padding: 0;
+  accent-color: #16796b;
+}
+
+.run-controls .speed-control strong {
+  color: #134d44;
+  font-size: 12px;
+  text-align: right;
+}
+
 .icon-button,
 .primary-button {
   display: inline-flex;
@@ -476,47 +492,90 @@ select {
   display: none;
 }
 
-.des-overlay {
-  display: grid;
-  grid-template-columns: auto auto auto auto;
-  align-items: center;
-  gap: 4px;
-  min-width: 86px;
-  padding: 3px 6px;
-  border: 1px solid color-mix(in srgb, #16796b var(--heat), #cfd7d3);
-  border-radius: 6px;
-  color: #12352f;
+.des-hidden-token-control {
+  display: none !important;
+}
+
+.des-task-stat-overlay,
+.des-frequency-overlay {
+  pointer-events: none;
+  color: #14342f;
   background: #ffffff;
-  box-shadow: 0 2px 8px rgb(28 39 35 / 14%);
+  box-shadow: 0 2px 8px rgb(28 39 35 / 16%);
   font-size: 11px;
   line-height: 1.1;
-  pointer-events: none;
 }
 
-.des-overlay strong {
-  font-size: 12px;
+.des-task-stat-overlay {
+  display: inline-flex;
+  gap: 6px;
+  max-width: 118px;
+  padding: 4px 6px;
+  border: 1px solid #b9c8c1;
+  border-radius: 5px;
+  white-space: nowrap;
 }
 
-.des-overlay span {
-  color: #5b6561;
+.des-task-stat-overlay span {
+  font-weight: 700;
 }
 
-.des-overlay em {
-  padding: 1px 3px;
-  border-radius: 4px;
-  color: #ffffff;
-  background: #b4413c;
-  font-style: normal;
+.des-frequency-overlay {
+  display: grid;
+  min-width: 22px;
+  height: 22px;
+  place-items: center;
+  border: 1px solid color-mix(in srgb, #16796b var(--heat), #bdcbc5);
+  border-radius: 5px;
 }
 
-.djs-element.des-active-path .djs-visual > :first-child {
+.des-frequency-overlay strong {
+  font-size: 11px;
+}
+
+.djs-element.des-active-path .djs-visual > :first-child,
+.djs-connection.des-active-path .djs-visual > :first-child {
   stroke: #16796b !important;
   stroke-width: 3px !important;
 }
 
-.djs-element.des-bottleneck .djs-visual > :first-child {
-  stroke: #c27b18 !important;
+.djs-element.des-wait-low .djs-visual > :first-child {
+  fill: #edf8f2 !important;
+  stroke: #2f8f67 !important;
+}
+
+.djs-element.des-wait-medium .djs-visual > :first-child {
+  fill: #fff3c4 !important;
+  stroke: #b48916 !important;
+  stroke-width: 3px !important;
+}
+
+.djs-element.des-wait-high .djs-visual > :first-child {
+  fill: #ffd9b5 !important;
+  stroke: #c26a23 !important;
   stroke-width: 4px !important;
+}
+
+.djs-element.des-wait-critical .djs-visual > :first-child {
+  fill: #ffd0cc !important;
+  stroke: #b4413c !important;
+  stroke-width: 5px !important;
+}
+
+.djs-connection.des-flow-low .djs-visual > :first-child {
+  stroke-width: 2px !important;
+}
+
+.djs-connection.des-flow-medium .djs-visual > :first-child {
+  stroke-width: 4px !important;
+}
+
+.djs-connection.des-flow-high .djs-visual > :first-child {
+  stroke-width: 6px !important;
+}
+
+.djs-connection.des-flow-critical .djs-visual > :first-child {
+  stroke-width: 8px !important;
 }
 
 .djs-element.des-error-risk .djs-visual > :first-child {
@@ -528,10 +587,32 @@ select {
   filter: drop-shadow(0 0 5px rgb(22 121 107 / 55%));
 }
 
+.djs-element.des-token-current .djs-visual > :first-child {
+  stroke: #10d070 !important;
+  stroke-width: 4px !important;
+}
+
 .djs-element.des-unsupported .djs-visual > :first-child {
   stroke: #6b5b95 !important;
   stroke-dasharray: 7 4 !important;
   stroke-width: 4px !important;
+}
+
+.des-node-tokens {
+  pointer-events: none;
+}
+
+.des-node-token circle {
+  fill: #10d070;
+  stroke: #ffffff;
+  stroke-width: 2;
+  filter: drop-shadow(0 2px 5px rgb(14 66 54 / 35%));
+}
+
+.des-node-token text {
+  fill: #ffffff;
+  font-size: 11px;
+  font-weight: 700;
 }
 
 .sim-duration-editor,

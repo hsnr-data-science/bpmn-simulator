@@ -19,18 +19,30 @@ import { SimulationRunner } from '../simulation/SimulationRunner';
 import type { BpmnBusinessObject, BpmnDefinitions, BpmnElement, BpmnFactory, Modeling } from '../types/bpmn';
 import type { ElementMetrics, SimulationResource, SimulationResult, Weekday } from '../types/simulation';
 import { SimulationPropertiesProviderModule } from '../properties/SimulationPropertiesProvider';
+import { DesTokenAnimator } from '../visualization/DesTokenAnimator';
 import { HeatmapOverlayManager } from '../visualization/HeatmapOverlayManager';
 import { SimulationLogPanel } from '../visualization/SimulationLogPanel';
 import { TokenOverlayManager } from '../visualization/TokenOverlayManager';
+import { TokenSimulationContextPadFilterModule } from '../visualization/TokenSimulationContextPadFilter';
 
 type Canvas = {
   zoom(mode: string): void;
   addMarker(elementId: string, marker: string): void;
   removeMarker(elementId: string, marker: string): void;
   getRootElement(): BpmnElement;
+  getContainer(): HTMLElement;
 };
 
 type Overlays = ConstructorParameters<typeof HeatmapOverlayManager>[0];
+type DesTokenAnimatorParameters = ConstructorParameters<typeof DesTokenAnimator>;
+
+type EventBus = {
+  on(event: string, callback: (event: { active?: boolean }) => void): void;
+};
+
+type ToggleMode = {
+  _active?: boolean;
+};
 
 type ModelerWithDefinitions = BpmnModeler & {
   getDefinitions(): unknown;
@@ -57,6 +69,7 @@ type AppElements = {
   seed: HTMLInputElement;
   untilTime: HTMLInputElement;
   animationSpeed: HTMLInputElement;
+  animationSpeedValue: HTMLElement;
   statusLine: HTMLElement;
   metricCompleted: HTMLElement;
   metricFailed: HTMLElement;
@@ -76,11 +89,14 @@ export class ModelerApp {
   private readonly modeler: ModelerWithDefinitions;
   private readonly canvas: Canvas;
   private readonly heatmapOverlays: HeatmapOverlayManager;
+  private readonly tokenAnimator: DesTokenAnimator;
   private readonly eventLogPanel: SimulationLogPanel;
   private readonly warningPanel: SimulationLogPanel;
   private readonly elements: AppElements;
   private readonly runner = new SimulationRunner();
   private lastResult: SimulationResult | undefined;
+  private tokenSimulationActive = false;
+  private simulationRunId = 0;
 
   constructor(root: HTMLElement) {
     this.root = root;
@@ -94,6 +110,7 @@ export class ModelerApp {
       },
       additionalModules: [
         TokenSimulationModule,
+        TokenSimulationContextPadFilterModule,
         BpmnPropertiesPanelModule,
         BpmnPropertiesProviderModule,
         SimulationPropertiesProviderModule
@@ -111,11 +128,18 @@ export class ModelerApp {
       this.canvas,
       tokenOverlays
     );
+    this.tokenAnimator = new DesTokenAnimator(
+      this.canvas,
+      this.modeler.get<DesTokenAnimatorParameters[1]>('elementRegistry'),
+      this.modeler.get<DesTokenAnimatorParameters[2]>('animation')
+    );
 
     this.elements = this.collectElements();
     this.eventLogPanel = new SimulationLogPanel(this.elements.eventLogList);
     this.warningPanel = new SimulationLogPanel(this.elements.warningList);
     this.bindEvents();
+    this.bindTokenSimulationMode();
+    this.updateAnimationSpeedLabel();
   }
 
   async start(): Promise<void> {
@@ -165,16 +189,15 @@ export class ModelerApp {
     });
 
     this.elements.runSimulation.addEventListener('click', () => {
-      this.runSimulation();
+      void this.runSimulation();
     });
 
     this.elements.monteCarlo.addEventListener('click', () => {
-      this.runSimulation();
+      void this.runSimulation();
     });
 
     this.elements.stepSimulation.addEventListener('click', () => {
-      this.runSimulation(1);
-      this.setStatus('Ein Simulationsschritt als 1-Case-Run ausgefuehrt');
+      void this.runSimulation(1);
     });
 
     this.elements.pauseSimulation.addEventListener('click', () => {
@@ -182,10 +205,14 @@ export class ModelerApp {
     });
 
     this.elements.stopSimulation.addEventListener('click', () => {
-      this.setStatus('Stop ist vorbereitet; laufende synchrone Runs enden sofort nach Abschluss.');
+      this.simulationRunId += 1;
+      this.tokenAnimator.stop();
+      this.setStatus('Simulation gestoppt');
     });
 
     this.elements.resetSimulation.addEventListener('click', () => {
+      this.simulationRunId += 1;
+      this.tokenAnimator.stop();
       this.heatmapOverlays.clear();
       this.lastResult = undefined;
       this.setExportButtons(false);
@@ -194,8 +221,16 @@ export class ModelerApp {
     });
 
     this.elements.clearOverlays.addEventListener('click', () => {
+      this.tokenAnimator.stop();
       this.heatmapOverlays.clear();
       this.setStatus('Overlays zurueckgesetzt');
+    });
+
+    this.elements.animationSpeed.addEventListener('input', () => {
+      const speed = readAnimationSpeed(this.elements.animationSpeed);
+
+      this.updateAnimationSpeedLabel();
+      this.tokenAnimator.setSpeed(speed);
     });
 
     this.elements.addResource.addEventListener('click', () => {
@@ -265,6 +300,8 @@ export class ModelerApp {
     try {
       await this.modeler.importXML(xml);
       this.canvas.zoom('fit-viewport');
+      this.simulationRunId += 1;
+      this.tokenAnimator.stop();
       this.heatmapOverlays.clear();
       this.lastResult = undefined;
       this.setExportButtons(false);
@@ -276,24 +313,49 @@ export class ModelerApp {
     }
   }
 
-  private runSimulation(numberOfRunsOverride?: number): void {
+  private async runSimulation(numberOfRunsOverride?: number): Promise<void> {
+    const runId = ++this.simulationRunId;
+
     try {
+      this.tokenAnimator.stop();
       const definitions = this.modeler.getDefinitions();
       const simModel = buildBpmnGraph(definitions as never);
+      const animationSpeed = readAnimationSpeed(this.elements.animationSpeed);
       const result = this.runner.run(simModel, {
         numberOfRuns: numberOfRunsOverride ?? readInteger(this.elements.caseCount, 250),
         randomSeed: readInteger(this.elements.seed, 42),
         maxSimulationTime: readOptionalNumber(this.elements.untilTime),
-        animationSpeed: readOptionalNumber(this.elements.animationSpeed) ?? 1,
+        animationSpeed,
         collectTraces: true
       });
 
       this.lastResult = result;
-      this.heatmapOverlays.render(result);
-      this.renderResults(result);
+      this.heatmapOverlays.clear();
       this.setExportButtons(true);
+
+      if (this.isTokenSimulationActive()) {
+        this.renderEmptyResults();
+        this.setStatus(`Token-Visualisierung laeuft mit ${animationSpeed}x`);
+        await this.tokenAnimator.play(result, animationSpeed, (progressResult) => {
+          this.renderResults(progressResult);
+          this.heatmapOverlays.render(progressResult);
+        });
+
+        if (runId !== this.simulationRunId) {
+          return;
+        }
+
+        this.renderResults(result);
+        this.heatmapOverlays.render(result);
+        this.setStatus(`${result.completedCases} Cases abgeschlossen und visualisiert`);
+        return;
+      }
+
+      this.renderResults(result);
+      this.heatmapOverlays.render(result);
       this.setStatus(`${result.completedCases} Cases abgeschlossen`);
     } catch (error) {
+      this.tokenAnimator.stop();
       this.setStatus(error instanceof Error ? error.message : 'Simulation fehlgeschlagen');
     }
   }
@@ -474,6 +536,7 @@ export class ModelerApp {
       seed: getElement('seed'),
       untilTime: getElement('until-time'),
       animationSpeed: getElement('animation-speed'),
+      animationSpeedValue: getElement('animation-speed-value'),
       statusLine: getElement('status-line'),
       metricCompleted: getElement('metric-completed'),
       metricFailed: getElement('metric-failed'),
@@ -499,7 +562,32 @@ export class ModelerApp {
     this.elements.exportCsv.disabled = !enabled;
     this.elements.exportXes.disabled = !enabled;
   }
+
+  private bindTokenSimulationMode(): void {
+    const eventBus = this.modeler.get<EventBus>('eventBus');
+    const toggleMode = this.modeler.get<ToggleMode>('toggleMode');
+
+    this.tokenSimulationActive = Boolean(toggleMode._active);
+
+    eventBus.on('tokenSimulation.toggleMode', (event) => {
+      this.tokenSimulationActive = Boolean(event.active);
+
+      if (!this.tokenSimulationActive) {
+        this.tokenAnimator.stop();
+      }
+    });
+  }
+
+  private isTokenSimulationActive(): boolean {
+    return this.tokenSimulationActive;
+  }
+
+  private updateAnimationSpeedLabel(): void {
+    this.elements.animationSpeedValue.textContent = `${readAnimationSpeed(this.elements.animationSpeed)}x`;
+  }
 }
+
+const ANIMATION_SPEEDS = [1, 10, 100, 1000, 10000] as const;
 
 function createShellMarkup(): string {
   return `
@@ -555,10 +643,18 @@ function createShellMarkup(): string {
           <button id="clear-overlays" class="icon-button" title="Overlays zuruecksetzen" aria-label="Overlays zuruecksetzen">
             <i data-lucide="refresh-ccw"></i>
           </button>
-          <label>
+          <label class="speed-control">
             <span>Speed</span>
-            <input id="animation-speed" type="number" min="0.1" step="0.1" value="1" />
+            <input id="animation-speed" type="range" min="0" max="4" step="1" value="0" list="animation-speed-marks" />
+            <strong id="animation-speed-value">1x</strong>
           </label>
+          <datalist id="animation-speed-marks">
+            <option value="0" label="1"></option>
+            <option value="1" label="10"></option>
+            <option value="2" label="100"></option>
+            <option value="3" label="1000"></option>
+            <option value="4" label="10000"></option>
+          </datalist>
         </div>
       </header>
       <section class="workspace">
@@ -695,6 +791,12 @@ function readOptionalNumber(input: HTMLInputElement): number | undefined {
   const value = Number(input.value);
 
   return Number.isFinite(value) && value >= 0 ? value : undefined;
+}
+
+function readAnimationSpeed(input: HTMLInputElement): number {
+  const index = Math.max(0, Math.min(ANIMATION_SPEEDS.length - 1, Math.round(Number(input.value) || 0)));
+
+  return ANIMATION_SPEEDS[index];
 }
 
 function formatNumber(value: number): string {

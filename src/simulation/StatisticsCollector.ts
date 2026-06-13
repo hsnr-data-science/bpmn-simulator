@@ -11,6 +11,7 @@ import type {
 
 export class StatisticsCollector {
   private readonly elementMetrics = new Map<string, ElementMetrics>();
+  private readonly waitTimeSamples = new Map<string, number[]>();
   private readonly flowMetrics = new Map<string, FlowMetrics>();
   private readonly logEntries: SimulationLogEntry[] = [];
 
@@ -20,8 +21,10 @@ export class StatisticsCollector {
 
   recordService(node: SimNode, waitTime: number, serviceTime: number): void {
     const metrics = this.getElementMetrics(node);
+    const wait = Math.max(0, waitTime);
 
-    metrics.waitTime += Math.max(0, waitTime);
+    metrics.waitTime += wait;
+    this.recordWaitTimeSample(node.id, wait);
     metrics.serviceTime += Math.max(0, serviceTime);
   }
 
@@ -110,7 +113,12 @@ export class StatisticsCollector {
     const warnings = this.logEntries
       .filter((entry) => entry.level === 'warning')
       .map((entry) => entry.message);
-    const elementMetrics = [...this.elementMetrics.values()].sort((a, b) => b.visits - a.visits);
+    const elementMetrics = [...this.elementMetrics.values()]
+      .map((metric) => ({
+        ...metric,
+        waitTimeStddev: standardDeviation(this.waitTimeSamples.get(metric.elementId) ?? [])
+      }))
+      .sort((a, b) => b.visits - a.visits);
     const flowMetrics = [...this.flowMetrics.values()].sort((a, b) => b.count - a.count);
     const pathProbabilities = calculatePathProbabilities(flowMetrics);
     const activityUtilization = elementMetrics.map((metric) => {
@@ -174,6 +182,7 @@ export class StatisticsCollector {
       errors: 0,
       retries: 0,
       waitTime: 0,
+      waitTimeStddev: 0,
       serviceTime: 0,
       unsupported: !node.supported
     };
@@ -190,6 +199,13 @@ export class StatisticsCollector {
       elementId,
       time
     });
+  }
+
+  private recordWaitTimeSample(elementId: string, waitTime: number): void {
+    const samples = this.waitTimeSamples.get(elementId) ?? [];
+
+    samples.push(waitTime);
+    this.waitTimeSamples.set(elementId, samples);
   }
 }
 
@@ -221,6 +237,7 @@ function createCsv(result: ExportBase): string {
       csvLine('element_visits', metric.elementId, metric.name, metric.visits),
       csvLine('element_errors', metric.elementId, metric.name, metric.errors),
       csvLine('element_wait_time', metric.elementId, metric.name, metric.waitTime),
+      csvLine('element_wait_time_stddev', metric.elementId, metric.name, metric.waitTimeStddev),
       csvLine('element_service_time', metric.elementId, metric.name, metric.serviceTime)
     ]),
     ...result.pathProbabilities.map((path) => {
@@ -266,6 +283,17 @@ function average(values: number[]): number {
   }
 
   return values.reduce((sum, value) => sum + value, 0) / values.length;
+}
+
+function standardDeviation(values: number[]): number {
+  if (values.length < 2) {
+    return 0;
+  }
+
+  const mean = average(values);
+  const variance = values.reduce((sum, value) => sum + (value - mean) ** 2, 0) / values.length;
+
+  return Math.sqrt(variance);
 }
 
 function percentile(values: number[], p: number): number {

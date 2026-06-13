@@ -47,6 +47,36 @@ test('DES uses resource calendars for task start and working-time completion', (
   assert.equal(result.elementMetrics.find((metric) => metric.elementId === 'task')?.waitTime, 8);
 });
 
+test('DES reports standard deviation for task waiting times', () => {
+  const model = createLinearModel();
+  const start = model.nodes.get('start');
+  const task = model.nodes.get('task');
+
+  if (!start || !task) {
+    throw new Error('model incomplete');
+  }
+
+  start.params.arrival = {
+    type: 'fixedInterval',
+    interval: 0
+  };
+  task.params.resource = {
+    resourceId: 'single_worker',
+    capacity: 1
+  };
+
+  const result = new DesEngine(model, {
+    numberOfRuns: 2,
+    randomSeed: 1,
+    animationSpeed: 1,
+    collectTraces: true
+  }).run();
+  const taskMetrics = result.elementMetrics.find((metric) => metric.elementId === 'task');
+
+  assert.equal(taskMetrics?.waitTime, 5);
+  assert.equal(taskMetrics?.waitTimeStddev, 2.5);
+});
+
 test('DES samples output objects for completed tasks', () => {
   const model = createLinearModel();
   const task = model.nodes.get('task');
