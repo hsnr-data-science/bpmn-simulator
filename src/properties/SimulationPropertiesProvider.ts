@@ -7,12 +7,13 @@ import {
   TextFieldEntry
 } from '@bpmn-io/properties-panel';
 import { useService } from 'bpmn-js-properties-panel';
-import { isSimulationEditable, isTaskType } from '../bpmn/BpmnElementClassifier';
+import { isSimulationEditable, isTaskType, supportsOutputObject } from '../bpmn/BpmnElementClassifier';
 import { readRawSimulationValue, readResourceCatalog } from '../bpmn/ExtensionElementReader';
 import { updateSimulationValue } from '../bpmn/ExtensionElementWriter';
 import type { BpmnElement, BpmnFactory, Modeling } from '../types/bpmn';
 import { branchProbabilityEntries } from './entries/BranchProbabilityEntry';
 import { durationDistributionEntries } from './entries/DurationDistributionEntry';
+import { outputObjectEntries } from './entries/OutputObjectEntry';
 import { resourceEntries } from './entries/ResourceEntry';
 import { serviceTaskOutputEntries } from './entries/ServiceTaskOutputEntry';
 
@@ -102,6 +103,10 @@ function createEntries(element: BpmnElement): Entry[] {
       ...(durationDistributionEntries() as EntryDefinition[]),
       ...(resourceEntries() as EntryDefinition[])
     );
+  }
+
+  if (supportsOutputObject(type)) {
+    definitions.push(...(outputObjectEntries() as EntryDefinition[]));
   }
 
   if (type === 'bpmn:ServiceTask') {

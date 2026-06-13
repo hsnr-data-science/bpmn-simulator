@@ -1,4 +1,4 @@
-import type { DurationConfig, PossibleError, PossibleOutput } from '../types/simulation';
+import type { DurationConfig } from '../types/simulation';
 
 export class SeededRandom {
   private state: number;
@@ -52,7 +52,7 @@ export function sampleInterarrival(mean: number, random: SeededRandom): number {
   return exponential(Math.max(mean, Number.EPSILON), random);
 }
 
-export function pickWeighted<T extends PossibleOutput | PossibleError>(
+export function pickWeighted<T extends { probability?: number }>(
   entries: T[] | undefined,
   random: SeededRandom
 ): T | undefined {

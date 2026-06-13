@@ -6,6 +6,10 @@ import {
   serializeWeekdays
 } from '../simulation/ResourceCalendar';
 import {
+  parseOutputObjectText,
+  serializeOutputChoices
+} from '../simulation/OutputObjects';
+import {
   parseWeightedText,
   RESOURCE_CATALOG_TYPE,
   SEQUENCE_FLOW_CONFIG_TYPE,
@@ -19,6 +23,7 @@ const PATH_TYPE_MAP: Record<string, string> = {
   duration: 'sim:Duration',
   resource: 'sim:Resource',
   failure: 'sim:Failure',
+  outputObject: 'sim:OutputObject',
   retryDelay: 'sim:RetryDelay',
   serviceOutput: 'sim:ServiceOutput',
   serviceError: 'sim:ServiceError',
@@ -150,6 +155,12 @@ function setConfigPath(
     return;
   }
 
+  if (path[0] === 'outputObject' && path[1] === 'fields') {
+    const outputObject = ensureChild(config, 'outputObject', bpmnFactory);
+    outputObject.fields = createOutputFieldElements(value as string | undefined, bpmnFactory);
+    return;
+  }
+
   if (path[0] === 'error' && path[1] === 'possibleErrors') {
     const error = ensureChild(config, 'serviceError', bpmnFactory);
     error.possibleErrors = createWeightedElements(value as string | undefined, 'sim:PossibleError', 'errorCode', bpmnFactory);
@@ -173,6 +184,26 @@ function setConfigPath(
     delete target.calendar;
     delete target.name;
   }
+}
+
+function createOutputFieldElements(
+  value: string | undefined,
+  bpmnFactory: BpmnFactory
+): BpmnBusinessObject[] {
+  return (parseOutputObjectText(value) ?? []).map((field) => bpmnFactory.create('sim:OutputField', {
+    key: field.key,
+    type: field.type,
+    generator: field.generator,
+    value: field.value,
+    choices: serializeOutputChoices(field.choices),
+    mean: field.mean === undefined ? undefined : String(field.mean),
+    stddev: field.stddev === undefined ? undefined : String(field.stddev),
+    min: field.min === undefined ? undefined : String(field.min),
+    max: field.max === undefined ? undefined : String(field.max),
+    mode: field.mode === undefined ? undefined : String(field.mode),
+    lambda: field.lambda === undefined ? undefined : String(field.lambda),
+    length: field.length === undefined ? undefined : String(field.length)
+  }));
 }
 
 function ensureChild(

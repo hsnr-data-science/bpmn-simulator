@@ -1,4 +1,4 @@
-import type { CaseTrace, Token } from '../types/simulation';
+import type { CaseOutputValue, CaseTrace, OutputValue, Token } from '../types/simulation';
 
 export type CaseState = {
   id: number;
@@ -8,7 +8,7 @@ export type CaseState = {
   failed: boolean;
   retries: number;
   path: string[];
-  outputs: Record<string, string>;
+  outputs: Record<string, CaseOutputValue>;
   errors: string[];
   joinCounts: Map<string, number>;
 };
@@ -97,12 +97,20 @@ export class TokenStore {
     }
   }
 
-  setOutput(caseId: number, key: string, value: string): void {
+  setOutput(caseId: number, key: string, value: CaseOutputValue): void {
     const state = this.getCase(caseId);
 
     if (state) {
       state.outputs[key] = value;
     }
+  }
+
+  setOutputObject(caseId: number, key: string, value: Record<string, OutputValue>): void {
+    if (!Object.keys(value).length) {
+      return;
+    }
+
+    this.setOutput(caseId, key, value);
   }
 
   getCase(caseId: number): CaseState | undefined {

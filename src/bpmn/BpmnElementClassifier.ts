@@ -122,6 +122,15 @@ export function isTaskType(type: string): boolean {
   return isTaskLike(type);
 }
 
+export function supportsOutputObject(type: string): boolean {
+  return [
+    'bpmn:UserTask',
+    'bpmn:ScriptTask',
+    'bpmn:ReceiveTask',
+    'bpmn:ServiceTask'
+  ].includes(type);
+}
+
 function isTaskLike(type: string): boolean {
   return [
     'bpmn:Task',

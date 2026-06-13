@@ -14,6 +14,7 @@
         { "name": "duration", "type": "Duration" },
         { "name": "resource", "type": "Resource" },
         { "name": "failure", "type": "Failure" },
+        { "name": "outputObject", "type": "OutputObject" },
         { "name": "serviceOutput", "type": "ServiceOutput" },
         { "name": "serviceError", "type": "ServiceError" }
       ]
@@ -70,6 +71,31 @@
         { "name": "max", "type": "String", "isAttr": true },
         { "name": "mode", "type": "String", "isAttr": true },
         { "name": "lambda", "type": "String", "isAttr": true }
+      ]
+    },
+    {
+      "name": "OutputObject",
+      "superClass": ["Element"],
+      "properties": [
+        { "name": "fields", "type": "OutputField", "isMany": true }
+      ]
+    },
+    {
+      "name": "OutputField",
+      "superClass": ["Element"],
+      "properties": [
+        { "name": "key", "type": "String", "isAttr": true },
+        { "name": "type", "type": "String", "isAttr": true },
+        { "name": "generator", "type": "String", "isAttr": true },
+        { "name": "value", "type": "String", "isAttr": true },
+        { "name": "choices", "type": "String", "isAttr": true },
+        { "name": "mean", "type": "String", "isAttr": true },
+        { "name": "stddev", "type": "String", "isAttr": true },
+        { "name": "min", "type": "String", "isAttr": true },
+        { "name": "max", "type": "String", "isAttr": true },
+        { "name": "mode", "type": "String", "isAttr": true },
+        { "name": "lambda", "type": "String", "isAttr": true },
+        { "name": "length", "type": "String", "isAttr": true }
       ]
     },
     {

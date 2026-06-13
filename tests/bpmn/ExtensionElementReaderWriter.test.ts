@@ -36,6 +36,14 @@ test('ExtensionElementWriter persists nested task duration and resource config',
   updateSimulationValue(element, 'task', ['duration', 'stddev'], '2', bpmnFactory, modeling);
   updateSimulationValue(element, 'task', ['resource', 'resourceId'], 'clerk', bpmnFactory, modeling);
   updateSimulationValue(element, 'task', ['resource', 'capacity'], '3', bpmnFactory, modeling);
+  updateSimulationValue(
+    element,
+    'task',
+    ['outputObject', 'fields'],
+    'score:int:normal:mean=10,stddev=2,min=0; status:string:categorical:ok:0.8|manual:0.2',
+    bpmnFactory,
+    modeling
+  );
   updateSimulationValue(element, 'task', ['output', 'possibleOutputs'], 'ok:0.8, manual:0.2', bpmnFactory, modeling);
 
   const config = readTaskConfig(businessObject);
@@ -45,6 +53,39 @@ test('ExtensionElementWriter persists nested task duration and resource config',
   assert.equal(config.duration?.stddev, 2);
   assert.equal(config.resource?.resourceId, 'clerk');
   assert.equal(config.resource?.capacity, 3);
+  assert.deepEqual(config.outputObject?.fields, [
+    {
+      key: 'score',
+      type: 'int',
+      generator: 'normal',
+      value: undefined,
+      choices: undefined,
+      mean: 10,
+      stddev: 2,
+      min: 0,
+      max: undefined,
+      mode: undefined,
+      lambda: undefined,
+      length: undefined
+    },
+    {
+      key: 'status',
+      type: 'string',
+      generator: 'categorical',
+      value: undefined,
+      choices: [
+        { value: 'ok', probability: 0.8 },
+        { value: 'manual', probability: 0.2 }
+      ],
+      mean: undefined,
+      stddev: undefined,
+      min: undefined,
+      max: undefined,
+      mode: undefined,
+      lambda: undefined,
+      length: undefined
+    }
+  ]);
   assert.deepEqual(config.output?.possibleOutputs, [
     { value: 'ok', probability: 0.8 },
     { value: 'manual', probability: 0.2 }

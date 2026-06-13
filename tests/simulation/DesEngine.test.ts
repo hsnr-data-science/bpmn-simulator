@@ -47,6 +47,47 @@ test('DES uses resource calendars for task start and working-time completion', (
   assert.equal(result.elementMetrics.find((metric) => metric.elementId === 'task')?.waitTime, 8);
 });
 
+test('DES samples output objects for completed tasks', () => {
+  const model = createLinearModel();
+  const task = model.nodes.get('task');
+
+  if (!task) {
+    throw new Error('task missing');
+  }
+
+  task.kind = 'userTask';
+  task.params.outputObject = {
+    fields: [
+      {
+        key: 'count',
+        type: 'int',
+        generator: 'fixed',
+        value: '5'
+      },
+      {
+        key: 'status',
+        type: 'string',
+        generator: 'categorical',
+        choices: [
+          { value: 'ok', probability: 1 }
+        ]
+      }
+    ]
+  };
+
+  const result = new DesEngine(model, {
+    numberOfRuns: 1,
+    randomSeed: 1,
+    animationSpeed: 1,
+    collectTraces: true
+  }).run();
+
+  assert.deepEqual(result.cases[0].outputs.task, {
+    count: 5,
+    status: 'ok'
+  });
+});
+
 function createLinearModel(): SimModel {
   const nodes: SimNode[] = [
     node('start', 'Start', 'startEvent', ['flow_start_task']),

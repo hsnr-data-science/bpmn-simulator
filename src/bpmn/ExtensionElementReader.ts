@@ -6,6 +6,8 @@ import type {
   ErrorConfig,
   FailureConfig,
   OutputConfig,
+  OutputFieldConfig,
+  OutputObjectConfig,
   PossibleError,
   PossibleOutput,
   ResourceConfig,
@@ -20,6 +22,10 @@ import {
   parseLegacyCalendar,
   parseWeekdays
 } from '../simulation/ResourceCalendar';
+import {
+  parseOutputChoices,
+  serializeOutputObjectFields
+} from '../simulation/OutputObjects';
 
 export const SIM_NS_URI = 'https://hsnr.de/data-science/bpmn/simulation';
 export const TASK_CONFIG_TYPE = 'sim:TaskConfig';
@@ -56,6 +62,7 @@ export function readTaskConfig(element?: BpmnBusinessObject): TaskSimulationConf
     duration: readDuration(config.duration as BpmnBusinessObject | undefined),
     resource: readResource(config.resource as BpmnBusinessObject | undefined),
     failure: readFailure(config.failure as BpmnBusinessObject | undefined),
+    outputObject: readOutputObject(config.outputObject as BpmnBusinessObject | undefined),
     output: readOutput(config.serviceOutput as BpmnBusinessObject | undefined),
     error: readError(config.serviceError as BpmnBusinessObject | undefined)
   };
@@ -96,7 +103,7 @@ export function readRawSimulationValue(
   const value = readPath(readSimulationConfig(element), path);
 
   if (Array.isArray(value)) {
-    return serializeWeightedList(value);
+    return path[0] === 'outputObject' ? serializeOutputObjectFields(value as OutputFieldConfig[]) : serializeWeightedList(value);
   }
 
   if (typeof value === 'number') {
@@ -211,6 +218,48 @@ function readOutput(element?: BpmnBusinessObject): OutputConfig | undefined {
   };
 }
 
+function readOutputObject(element?: BpmnBusinessObject): OutputObjectConfig | undefined {
+  const fields = readOutputFields(element?.fields as BpmnBusinessObject[] | undefined);
+
+  return fields?.length ? { fields } : undefined;
+}
+
+function readOutputFields(elements?: BpmnBusinessObject[]): OutputFieldConfig[] | undefined {
+  if (!elements?.length) {
+    return undefined;
+  }
+
+  const fields = elements
+    .map(readOutputField)
+    .filter((field): field is OutputFieldConfig => Boolean(field));
+
+  return fields.length ? fields : undefined;
+}
+
+function readOutputField(element?: BpmnBusinessObject): OutputFieldConfig | undefined {
+  const key = asString(element?.key);
+  const type = normalizeOutputValueType(asString(element?.type));
+
+  if (!key || !type) {
+    return undefined;
+  }
+
+  return {
+    key,
+    type,
+    generator: normalizeOutputGenerator(asString(element?.generator), type),
+    value: asString(element?.value),
+    choices: parseOutputChoices(asString(element?.choices)),
+    mean: asNumber(element?.mean),
+    stddev: asNumber(element?.stddev),
+    min: asNumber(element?.min),
+    max: asNumber(element?.max),
+    mode: asNumber(element?.mode),
+    lambda: asNumber(element?.lambda),
+    length: asInteger(element?.length)
+  };
+}
+
 function readError(element?: BpmnBusinessObject): ErrorConfig | undefined {
   if (!element) {
     return undefined;
@@ -298,6 +347,34 @@ function readLegacyConfig(element?: BpmnBusinessObject): ElementSimulationConfig
       possibleOutputs: parseWeightedText(asString(legacy.outputValues), 'value')
     }
   };
+}
+
+function normalizeOutputValueType(value: string | undefined): OutputFieldConfig['type'] | undefined {
+  if (value === 'integer') {
+    return 'int';
+  }
+
+  if (value === 'int' || value === 'float' || value === 'string') {
+    return value;
+  }
+
+  return undefined;
+}
+
+function normalizeOutputGenerator(
+  value: string | undefined,
+  type: OutputFieldConfig['type']
+): OutputFieldConfig['generator'] {
+  if (value === 'choice') {
+    return type === 'string' ? 'categorical' : 'randomChoice';
+  }
+
+  if (value === 'randomChoice' || value === 'fixed' || value === 'uniform' || value === 'normal' ||
+    value === 'exponential' || value === 'triangular' || value === 'random' || value === 'categorical') {
+    return value;
+  }
+
+  return type === 'string' ? 'random' : 'fixed';
 }
 
 function readPath(source: unknown, path: string[]): unknown {

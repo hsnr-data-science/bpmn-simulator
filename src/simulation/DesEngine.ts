@@ -2,6 +2,7 @@ import type { SimModel, SimNode } from '../types/bpmn';
 import type { SimulationConfig, SimulationEvent, Token } from '../types/simulation';
 import { BpmnSimulationInterpreter } from './BpmnSimulationInterpreter';
 import { EventQueue } from './EventQueue';
+import { sampleOutputObject } from './OutputObjects';
 import { bernoulli, pickWeighted, sampleDuration, sampleInterarrival, SeededRandom } from './RandomDistributions';
 import { addWorkingTime } from './ResourceCalendar';
 import { ResourceManager, type QueuedTask } from './ResourceManager';
@@ -499,14 +500,17 @@ export class DesEngine {
   }
 
   private captureOutput(caseId: number, node: SimNode): void {
-    if (node.kind !== 'serviceTask' || node.params.output?.distribution === 'none') {
-      return;
+    const outputObject = sampleOutputObject(node.params.outputObject, this.random);
+    const serviceOutput = node.kind === 'serviceTask' && node.params.output?.distribution !== 'none'
+      ? pickWeighted(node.params.output?.possibleOutputs, this.random)?.value
+      : undefined;
+
+    if (serviceOutput !== undefined) {
+      outputObject.serviceOutput = serviceOutput;
     }
 
-    const output = pickWeighted(node.params.output?.possibleOutputs, this.random);
-
-    if (output?.value) {
-      this.tokens.setOutput(caseId, node.id, output.value);
+    if (Object.keys(outputObject).length) {
+      this.tokens.setOutputObject(caseId, node.id, outputObject);
     }
   }
 

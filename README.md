@@ -77,12 +77,26 @@ Die Parameter werden im BPMN XML unter `bpmn:extensionElements` gespeichert:
 </bpmn:process>
 
 <bpmn:extensionElements>
-  <sim:taskConfig>
-    <sim:duration type="normal" mean="10" stddev="2" />
-    <sim:resource id="clerk" />
-    <sim:failure probability="0.02" retryCount="2">
-      <sim:retryDelay type="fixed" mean="1" />
-    </sim:failure>
+    <sim:taskConfig>
+      <sim:duration type="normal" mean="10" stddev="2" />
+      <sim:resource id="clerk" />
+      <sim:outputObject>
+        <sim:outputField
+          key="score"
+          type="int"
+          generator="normal"
+          mean="10"
+          stddev="2"
+          min="0" />
+        <sim:outputField
+          key="status"
+          type="string"
+          generator="categorical"
+          choices="ok:0.8|manual:0.2" />
+      </sim:outputObject>
+      <sim:failure probability="0.02" retryCount="2">
+        <sim:retryDelay type="fixed" mean="1" />
+      </sim:failure>
   </sim:taskConfig>
 </bpmn:extensionElements>
 ```
@@ -90,13 +104,25 @@ Die Parameter werden im BPMN XML unter `bpmn:extensionElements` gespeichert:
 Editierbar im Properties Panel sind:
 
 - Tasks: Dauerverteilung `fixed`, `uniform`, `normal`, `exponential`, `triangular`, Ressourcenauswahl per Dropdown, Fehlerwahrscheinlichkeit, Retry-Anzahl und Retry-Delay.
-- Service Tasks: stochastische Outputs, Output-Verteilung, Fehlerwahrscheinlichkeit und mögliche Fehlercodes.
+- User Tasks, Script Tasks, Receive Tasks und Service Tasks: einfache Output-Objekte als Key-Value-Liste.
+- Service Tasks: zusaetzlich stochastische Legacy-Outputs, Output-Verteilung, Fehlerwahrscheinlichkeit und mögliche Fehlercodes.
 - Sequence Flows: Branch-Wahrscheinlichkeit für XOR-Gateways ohne Bedingungen.
 - Start Events: Ankunftsverteilung, Intervall-/Mittelwert-/Schedule-Felder und Anzahl der Cases.
 
 Globale Ressourcen werden in einem eigenen Ressourcenbereich der Anwendung gepflegt. Jede Ressource besitzt ID, Name, Kapazität und Verfügbarkeitskalender/Arbeitszeiten. Tasks speichern nur die Resource-ID als Referenz; Kapazität und Kalender werden beim Aufbau des Simulationsmodells aus dem globalen Katalog aufgelöst.
 
 Arbeitszeiten werden strukturiert gespeichert: `weekdays` nutzt `1=Montag` bis `7=Sonntag`, `hourRanges` nutzt stundenweise Bereiche von `0` bis `24`, z. B. `8-12,13-17`. Das lesbare `calendar`-Attribut bleibt als Zusammenfassung und Legacy-Fallback erhalten. In der Simulation gilt `t=0` als Montag 00:00; Ressourcen starten Tasks nur innerhalb ihrer Arbeitszeiten, und Bearbeitungszeit zählt als Arbeitszeit über Kalendergrenzen hinweg weiter.
+
+Output-Objekte sind bewusst flach und enthalten keine verschachtelten JSON-Strukturen. Im Properties Panel werden sie als Semikolon- oder zeilengetrennte Liste gepflegt:
+
+```text
+priority:int:randomChoice:1:0.2|2:0.5|3:0.3;
+amount:float:normal:mean=10,stddev=2,min=0;
+status:string:categorical:ok:0.8|manual:0.2;
+trackingCode:string:random:length=10
+```
+
+Unterstuetzte Feldtypen sind `int`, `float` und `string`. Zahlen koennen `fixed`, `randomChoice`, `uniform`, `normal`, `exponential` oder `triangular` nutzen. Strings koennen `random`, `fixed` oder `categorical` nutzen. Die Konfiguration liegt als generisches `sim:outputObject` vor und kann spaeter auch an Event-Konfigurationen wiederverwendet werden.
 
 ## DES-Kern
 

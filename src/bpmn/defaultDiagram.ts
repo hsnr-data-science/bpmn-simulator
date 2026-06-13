@@ -29,6 +29,10 @@ export const defaultDiagram = `<?xml version="1.0" encoding="UTF-8"?>
         <sim:taskConfig>
           <sim:duration type="triangular" min="2" mode="4" max="8" />
           <sim:resource id="Clerks" />
+          <sim:outputObject>
+            <sim:outputField key="priority" type="int" generator="randomChoice" choices="1:0.2|2:0.5|3:0.3" />
+            <sim:outputField key="reviewerNote" type="string" generator="categorical" choices="ok:0.8|manual_check:0.2" />
+          </sim:outputObject>
           <sim:failure probability="0.02" retryCount="1">
             <sim:retryDelay type="fixed" mean="1" />
           </sim:failure>
@@ -47,6 +51,10 @@ export const defaultDiagram = `<?xml version="1.0" encoding="UTF-8"?>
         <sim:taskConfig>
           <sim:duration type="normal" mean="6" stddev="1.5" min="1" />
           <sim:resource id="Warehouse" />
+          <sim:outputObject>
+            <sim:outputField key="packageWeight" type="float" generator="normal" mean="4.5" stddev="1.1" min="0.5" />
+            <sim:outputField key="trackingCode" type="string" generator="random" length="10" />
+          </sim:outputObject>
           <sim:failure probability="0.03" retryCount="2">
             <sim:retryDelay type="fixed" mean="2" />
           </sim:failure>

@@ -6,6 +6,20 @@ export type RetryDelayDistributionType = DurationDistributionType;
 
 export type OutputDistributionType = 'categorical' | 'none';
 
+export type OutputValueType = 'int' | 'float' | 'string';
+
+export type NumericOutputGeneratorType =
+  | 'fixed'
+  | 'randomChoice'
+  | 'uniform'
+  | 'normal'
+  | 'exponential'
+  | 'triangular';
+
+export type StringOutputGeneratorType = 'random' | 'categorical' | 'fixed';
+
+export type OutputGeneratorType = NumericOutputGeneratorType | StringOutputGeneratorType;
+
 export type SimulationEventType =
   | 'CASE_ARRIVAL'
   | 'TOKEN_ENTER_ELEMENT'
@@ -66,6 +80,30 @@ export type PossibleOutput = {
   probability?: number;
 };
 
+export type OutputChoice = {
+  value: string;
+  probability?: number;
+};
+
+export type OutputFieldConfig = {
+  key: string;
+  type: OutputValueType;
+  generator: OutputGeneratorType;
+  value?: string;
+  choices?: OutputChoice[];
+  mean?: number;
+  stddev?: number;
+  min?: number;
+  max?: number;
+  lambda?: number;
+  mode?: number;
+  length?: number;
+};
+
+export type OutputObjectConfig = {
+  fields?: OutputFieldConfig[];
+};
+
 export type OutputConfig = {
   distribution?: OutputDistributionType;
   possibleOutputs?: PossibleOutput[];
@@ -99,6 +137,7 @@ export type TaskSimulationConfig = {
   resource?: ResourceConfig;
   failure?: FailureConfig;
   output?: OutputConfig;
+  outputObject?: OutputObjectConfig;
   error?: ErrorConfig;
 };
 
@@ -140,6 +179,10 @@ export type Token = {
 
 export type CaseStatus = 'completed' | 'failed' | 'running';
 
+export type OutputValue = string | number;
+
+export type CaseOutputValue = OutputValue | Record<string, OutputValue>;
+
 export type CaseTrace = {
   id: number;
   startTime: number;
@@ -149,7 +192,7 @@ export type CaseTrace = {
   retries: number;
   activeTokens: number;
   path: string[];
-  outputs: Record<string, string>;
+  outputs: Record<string, CaseOutputValue>;
   errors: string[];
 };
 
