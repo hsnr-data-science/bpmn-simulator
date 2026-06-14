@@ -1,4 +1,4 @@
-import type { CaseTrace, SimulationLogEntry, SimulationResult } from '../types/simulation';
+import type { CaseTrace, ResourceMetrics, SimulationLogEntry, SimulationResult } from '../types/simulation';
 
 type Canvas = {
   addMarker(elementId: string, marker: string): void;
@@ -549,6 +549,7 @@ function createProgressResult(
   }
 
   const elementMetrics = result.elementMetrics.map((metric) => ({ ...metric }));
+  const resourceMetrics = result.resourceMetrics.map((metric) => resetResourceMetric({ ...metric }));
   const metricsById = new Map(elementMetrics.map((metric) => {
     metric.visits = 0;
     metric.completions = 0;
@@ -562,8 +563,10 @@ function createProgressResult(
 
     return [metric.elementId, metric] as const;
   }));
+  const resourceMetricsById = new Map(resourceMetrics.map((metric) => [metric.resourceId, metric] as const));
   const enterQueues = new Map<string, number[]>();
   const startQueues = new Map<string, number[]>();
+  const waitQueues = new Map<string, number[]>();
   const visibleLog = result.log.filter((entry) => (entry.time ?? 0) <= currentTime);
 
   for (const entry of visibleLog) {
@@ -591,6 +594,7 @@ function createProgressResult(
 
         metric.waitTime += waitTime;
         metric.waitTimeSamples?.push(waitTime);
+        pushQueue(waitQueues, key, waitTime);
         pushQueue(startQueues, key, time);
         break;
       }
@@ -602,6 +606,19 @@ function createProgressResult(
 
         metric.serviceTime += serviceTime;
         metric.serviceTimeSamples?.push(serviceTime);
+
+        if (entry.resourceId) {
+          const resource = resourceMetricsById.get(entry.resourceId);
+          const waitTime = shiftQueue(waitQueues, key) ?? 0;
+
+          if (resource) {
+            resource.taskCount += 1;
+            resource.waitTime += waitTime;
+            resource.waitTimeSamples?.push(waitTime);
+            resource.serviceTime += serviceTime;
+            resource.serviceTimeSamples?.push(serviceTime);
+          }
+        }
         break;
       }
       case 'PROCESS_INSTANCE_COMPLETE':
@@ -609,6 +626,13 @@ function createProgressResult(
         break;
       case 'TASK_FAILED':
         metric.errors += 1;
+        if (entry.resourceId) {
+          const resource = resourceMetricsById.get(entry.resourceId);
+
+          if (resource) {
+            resource.errors += 1;
+          }
+        }
         break;
       case 'RETRY_TASK':
         metric.retries += 1;
@@ -676,6 +700,7 @@ function createProgressResult(
     cycleTimeMax: finishedCycleTimes[finishedCycleTimes.length - 1] ?? 0,
     throughputPerTimeUnit: elapsedTime > 0 ? completedCases / elapsedTime : completedCases,
     elementMetrics,
+    resourceMetrics,
     flowMetrics,
     log: visibleLog,
     warnings: visibleLog.filter((entry) => entry.level === 'warning').map((entry) => entry.message),
@@ -693,6 +718,18 @@ function createProgressResult(
 
 function hoursToMinutes(hours: number): number {
   return Math.max(0, hours) * 60;
+}
+
+function resetResourceMetric(metric: ResourceMetrics): ResourceMetrics {
+  return {
+    ...metric,
+    taskCount: 0,
+    errors: 0,
+    waitTime: 0,
+    waitTimeSamples: [],
+    serviceTime: 0,
+    serviceTimeSamples: []
+  };
 }
 
 function buildTimeline(

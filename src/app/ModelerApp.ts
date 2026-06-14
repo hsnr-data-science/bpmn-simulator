@@ -16,7 +16,7 @@ import {
 } from '../simulation/ResourceCalendar';
 import { SimulationRunner } from '../simulation/SimulationRunner';
 import type { BpmnBusinessObject, BpmnDefinitions, BpmnElement, BpmnFactory, Modeling } from '../types/bpmn';
-import type { ElementMetrics, SimulationResource, SimulationResult, Weekday } from '../types/simulation';
+import type { ElementMetrics, ResourceMetrics, SimulationResource, SimulationResult, Weekday } from '../types/simulation';
 import { SimulationPropertiesProviderModule } from '../properties/SimulationPropertiesProvider';
 import { DesTokenSimulationModule } from '../visualization/DesTokenSimulationModule';
 import { DesTokenAnimator } from '../visualization/DesTokenAnimator';
@@ -60,8 +60,8 @@ type AppElements = {
   resetSimulation: HTMLButtonElement;
   addResource: HTMLButtonElement;
   exportJson: HTMLButtonElement;
-  exportCsv: HTMLButtonElement;
-  exportXes: HTMLButtonElement;
+  exportResultsCsv: HTMLButtonElement;
+  exportEventLogCsv: HTMLButtonElement;
   workspace: HTMLElement;
   leftResizer: HTMLElement;
   rightResizer: HTMLElement;
@@ -82,6 +82,7 @@ type AppElements = {
   bottleneckList: HTMLOListElement;
   pathList: HTMLOListElement;
   statsTable: HTMLTableSectionElement;
+  resourceStatsTable: HTMLTableSectionElement;
   eventLogList: HTMLUListElement;
   warningList: HTMLUListElement;
   logList: HTMLUListElement;
@@ -187,12 +188,12 @@ export class ModelerApp {
       this.exportResult('json');
     });
 
-    this.elements.exportCsv.addEventListener('click', () => {
-      this.exportResult('csv');
+    this.elements.exportResultsCsv.addEventListener('click', () => {
+      this.exportResult('resultsCsv');
     });
 
-    this.elements.exportXes.addEventListener('click', () => {
-      this.exportResult('xes');
+    this.elements.exportEventLogCsv.addEventListener('click', () => {
+      this.exportResult('eventLogCsv');
     });
 
     this.elements.runSimulation.addEventListener('click', () => {
@@ -277,18 +278,18 @@ export class ModelerApp {
     });
   }
 
-  private exportResult(kind: 'json' | 'csv' | 'xes'): void {
+  private exportResult(kind: 'json' | 'resultsCsv' | 'eventLogCsv'): void {
     if (!this.lastResult) {
       return;
     }
 
-    if (kind === 'csv') {
-      download('des-simulation-results.csv', this.lastResult.exports.csv, 'text/csv;charset=utf-8');
+    if (kind === 'resultsCsv') {
+      download('des-simulation-results.csv', this.lastResult.exports.simulationResultsCsv, 'text/csv;charset=utf-8');
       return;
     }
 
-    if (kind === 'xes') {
-      download('des-simulation-event-log.json', this.lastResult.exports.xesLike, 'application/json;charset=utf-8');
+    if (kind === 'eventLogCsv') {
+      download('des-simulation-event-log.csv', this.lastResult.exports.eventLogCsv, 'text/csv;charset=utf-8');
       return;
     }
 
@@ -387,6 +388,7 @@ export class ModelerApp {
     this.elements.bottleneckList.replaceChildren();
     this.elements.pathList.replaceChildren();
     this.elements.statsTable.replaceChildren();
+    this.elements.resourceStatsTable.replaceChildren();
     this.eventLogPanel.render([]);
     this.warningPanel.render([]);
   }
@@ -463,6 +465,7 @@ export class ModelerApp {
 
     this.renderBottlenecks(result.elementMetrics);
     this.renderPaths(result);
+    this.renderResourceStats(result.resourceMetrics);
     this.renderStatsTable(result);
     this.updateCurrentSimulationTime(result);
     this.eventLogPanel.render(result.log);
@@ -505,6 +508,27 @@ export class ModelerApp {
           <small>sequence flow</small>
         `;
         return item;
+      })
+    );
+  }
+
+  private renderResourceStats(metrics: ResourceMetrics[]): void {
+    this.elements.resourceStatsTable.replaceChildren(
+      ...metrics.map((metric) => {
+        const row = document.createElement('tr');
+        const nameCell = document.createElement('td');
+        const valueCell = document.createElement('td');
+        const service = describeSamples(metric.serviceTimeSamples ?? []);
+        const wait = describeSamples(metric.waitTimeSamples ?? []);
+
+        nameCell.textContent = metric.name || metric.resourceId;
+        valueCell.innerHTML = `
+          <strong>${metric.taskCount} tasks, ${metric.errors} errors</strong>
+          <small>Service ${formatSampleDescription(service)} min<br>Wait ${formatSampleDescription(wait)} min</small>
+        `;
+        row.append(nameCell, valueCell);
+
+        return row;
       })
     );
   }
@@ -690,8 +714,8 @@ export class ModelerApp {
       resetSimulation: getElement('reset-simulation'),
       addResource: getElement('add-resource'),
       exportJson: getElement('export-json'),
-      exportCsv: getElement('export-csv'),
-      exportXes: getElement('export-xes'),
+      exportResultsCsv: getElement('export-results-csv'),
+      exportEventLogCsv: getElement('export-event-log-csv'),
       workspace: getElement('workspace'),
       leftResizer: getElement('left-sidebar-resizer'),
       rightResizer: getElement('right-sidebar-resizer'),
@@ -712,6 +736,7 @@ export class ModelerApp {
       bottleneckList: getElement('bottleneck-list'),
       pathList: getElement('path-list'),
       statsTable: getElement('stats-table'),
+      resourceStatsTable: getElement('resource-stats-table'),
       eventLogList: getElement('event-log-list'),
       warningList: getElement('warning-list'),
       logList: getElement('log-list')
@@ -725,8 +750,8 @@ export class ModelerApp {
   private setExportButtons(enabled: boolean): void {
     this.elements.exportResults.disabled = !enabled;
     this.elements.exportJson.disabled = !enabled;
-    this.elements.exportCsv.disabled = !enabled;
-    this.elements.exportXes.disabled = !enabled;
+    this.elements.exportResultsCsv.disabled = !enabled;
+    this.elements.exportEventLogCsv.disabled = !enabled;
   }
 
   private bindTokenSimulationMode(): void {
@@ -891,6 +916,16 @@ function createShellMarkup(): string {
           <section class="panel-section collapsible-section">
             <details open>
               <summary class="section-title">
+                <h2>Resource Utilization</h2>
+              </summary>
+              <table class="stats-table resource-stats-table">
+                <tbody id="resource-stats-table"></tbody>
+              </table>
+            </details>
+          </section>
+          <section class="panel-section collapsible-section">
+            <details open>
+              <summary class="section-title">
                 <h2>Event Log</h2>
               </summary>
               <ul id="event-log-list" class="warning-list event-log-list"></ul>
@@ -911,8 +946,8 @@ function createShellMarkup(): string {
               </summary>
               <div class="export-buttons">
                 <button id="export-json" class="text-button" disabled>JSON</button>
-                <button id="export-csv" class="text-button" disabled>CSV</button>
-                <button id="export-xes" class="text-button" disabled>XES-like</button>
+                <button id="export-results-csv" class="text-button" disabled>Simulation Results CSV</button>
+                <button id="export-event-log-csv" class="text-button" disabled>Event Log CSV</button>
               </div>
               <ul id="log-list" class="warning-list hidden-log"></ul>
             </details>

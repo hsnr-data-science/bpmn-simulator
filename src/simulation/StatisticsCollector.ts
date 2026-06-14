@@ -1,8 +1,10 @@
 import type { SimFlow, SimModel, SimNode } from '../types/bpmn';
 import type {
+  CaseOutputValue,
   CaseTrace,
   ElementMetrics,
   FlowMetrics,
+  ResourceMetrics,
   SimulationConfig,
   SimulationEventType,
   SimulationLogEntry,
@@ -11,6 +13,7 @@ import type {
 
 export class StatisticsCollector {
   private readonly elementMetrics = new Map<string, ElementMetrics>();
+  private readonly resourceMetrics = new Map<string, ResourceMetrics>();
   private readonly waitTimeSamples = new Map<string, number[]>();
   private readonly flowMetrics = new Map<string, FlowMetrics>();
   private readonly logEntries: SimulationLogEntry[] = [];
@@ -29,6 +32,16 @@ export class StatisticsCollector {
     this.recordWaitTimeSample(node.id, wait);
     metrics.serviceTime += service;
     metrics.serviceTimeSamples?.push(service);
+
+    const resource = this.getResourceMetrics(node);
+
+    if (resource) {
+      resource.taskCount += 1;
+      resource.waitTime += wait;
+      resource.waitTimeSamples?.push(wait);
+      resource.serviceTime += service;
+      resource.serviceTimeSamples?.push(service);
+    }
   }
 
   recordCompletion(node: SimNode): void {
@@ -37,6 +50,12 @@ export class StatisticsCollector {
 
   recordError(node: SimNode): void {
     this.getElementMetrics(node).errors += 1;
+
+    const resource = this.getResourceMetrics(node);
+
+    if (resource) {
+      resource.errors += 1;
+    }
   }
 
   recordRetry(node: SimNode): void {
@@ -77,17 +96,43 @@ export class StatisticsCollector {
       caseId?: number;
       time?: number;
       level?: SimulationLogEntry['level'];
+      resourceId?: string;
+      variables?: Record<string, CaseOutputValue>;
     } = {}
-  ): void {
-    this.logEntries.push({
+  ): SimulationLogEntry {
+    const entry = {
       level: options.level ?? 'info',
       eventType,
       caseId: options.caseId,
       message,
       elementId: options.elementId,
       elementName: options.elementName,
+      resourceId: options.resourceId,
+      variables: cloneVariables(options.variables),
       time: options.time
+    };
+
+    this.logEntries.push({
+      ...entry
     });
+
+    return entry;
+  }
+
+  updateLastEventVariables(
+    caseId: number,
+    elementId: string,
+    eventType: SimulationEventType,
+    variables: Record<string, CaseOutputValue> | undefined
+  ): void {
+    for (let index = this.logEntries.length - 1; index >= 0; index -= 1) {
+      const entry = this.logEntries[index];
+
+      if (entry.caseId === caseId && entry.elementId === elementId && entry.eventType === eventType) {
+        entry.variables = cloneVariables(variables);
+        return;
+      }
+    }
   }
 
   buildResult(
@@ -123,6 +168,13 @@ export class StatisticsCollector {
         waitTimeStddev: standardDeviation(this.waitTimeSamples.get(metric.elementId) ?? [])
       }))
       .sort((a, b) => b.visits - a.visits);
+    const resourceNames = new Map([...model.resources.values()].map((resource) => [resource.id, resource.name || resource.id]));
+    const resourceMetrics = [...this.resourceMetrics.values()]
+      .map((metric) => ({
+        ...metric,
+        name: resourceNames.get(metric.resourceId) ?? metric.name
+      }))
+      .sort((a, b) => b.taskCount - a.taskCount);
     const flowMetrics = [...this.flowMetrics.values()].sort((a, b) => b.count - a.count);
     const pathProbabilities = calculatePathProbabilities(flowMetrics);
     const activityUtilization = elementMetrics.map((metric) => {
@@ -151,6 +203,7 @@ export class StatisticsCollector {
       cycleTimeMax: finishedCycleTimes[finishedCycleTimes.length - 1] ?? 0,
       throughputPerTimeUnit: elapsedTime > 0 ? completedCases / elapsedTime : completedCases,
       elementMetrics,
+      resourceMetrics,
       flowMetrics,
       log: this.logEntries,
       warnings,
@@ -165,8 +218,9 @@ export class StatisticsCollector {
       ...baseResult,
       exports: {
         json: JSON.stringify(baseResult, null, 2),
-        csv: createCsv(baseResult),
-        xesLike: createXesLikeLog(baseResult.log)
+        csv: createSimulationResultsCsv(baseResult),
+        simulationResultsCsv: createSimulationResultsCsv(baseResult),
+        eventLogCsv: createEventLogCsv(baseResult)
       }
     };
   }
@@ -195,6 +249,35 @@ export class StatisticsCollector {
     };
 
     this.elementMetrics.set(node.id, metrics);
+
+    return metrics;
+  }
+
+  private getResourceMetrics(node: SimNode): ResourceMetrics | undefined {
+    const resourceId = node.params.resource?.resourceId?.trim();
+
+    if (!resourceId) {
+      return undefined;
+    }
+
+    const existing = this.resourceMetrics.get(resourceId);
+
+    if (existing) {
+      return existing;
+    }
+
+    const metrics = {
+      resourceId,
+      name: resourceId,
+      taskCount: 0,
+      errors: 0,
+      waitTime: 0,
+      waitTimeSamples: [],
+      serviceTime: 0,
+      serviceTimeSamples: []
+    };
+
+    this.resourceMetrics.set(resourceId, metrics);
 
     return metrics;
   }
@@ -237,51 +320,278 @@ function calculatePathProbabilities(flowMetrics: FlowMetrics[]) {
   });
 }
 
-function createCsv(result: ExportBase): string {
+function createSimulationResultsCsv(result: ExportBase): string {
+  const taskRows = result.elementMetrics
+    .filter((metric) => isActivityMetric(metric.type))
+    .map((metric) => resultCsvLine(
+      'Task',
+      metric.elementId,
+      metric.name,
+      metric.visits,
+      metric.errors,
+      metric.serviceTimeSamples ?? [],
+      metric.waitTimeSamples ?? []
+    ));
+  const resourceRows = result.resourceMetrics.map((metric) => resultCsvLine(
+    'Resource',
+    metric.resourceId,
+    metric.name,
+    metric.taskCount,
+    metric.errors,
+    metric.serviceTimeSamples ?? [],
+    metric.waitTimeSamples ?? []
+  ));
+  const processWaitSamples = result.elementMetrics
+    .filter((metric) => isActivityMetric(metric.type))
+    .flatMap((metric) => metric.waitTimeSamples ?? []);
+  const processServiceSamples = result.cases
+    .filter((caseTrace) => caseTrace.status !== 'running')
+    .map((caseTrace) => caseTrace.cycleTime * 60);
   const lines = [
-    'metric,id,name,value',
-    ...result.elementMetrics.flatMap((metric) => [
-      csvLine('element_visits', metric.elementId, metric.name, metric.visits),
-      csvLine('element_errors', metric.elementId, metric.name, metric.errors),
-      csvLine('element_wait_time', metric.elementId, metric.name, metric.waitTime),
-      csvLine('element_wait_time_stddev', metric.elementId, metric.name, metric.waitTimeStddev),
-      csvLine('element_service_time', metric.elementId, metric.name, metric.serviceTime)
-    ]),
-    ...result.pathProbabilities.map((path) => {
-      return csvLine('path_probability', path.flowId, path.name, path.probability);
-    }),
-    csvLine('completed_cases', 'process', result.processName, result.completedCases),
-    csvLine('failed_cases', 'process', result.processName, result.failedCases),
-    csvLine('deadlock_suspicions', 'process', result.processName, result.deadlockSuspicions),
-    csvLine('unconsumed_tokens', 'process', result.processName, result.unconsumedTokens)
+    [
+      'Type',
+      'ID',
+      'Name',
+      'Anzahl Ausfuehrungen',
+      'Anzahl Fehler',
+      'Min Bearbeitungszeit',
+      'Max Bearbeitungszeit',
+      'Avg Bearbeitungszeit',
+      'Median Bearbeitungszeit',
+      'Min Wartezeit',
+      'Max Wartezeit',
+      'Avg Wartezeit',
+      'Median Wartezeit'
+    ].map(csvCell).join(','),
+    resultCsvLine(
+      'Process',
+      'process',
+      result.processName,
+      result.cases.length,
+      result.failedCases,
+      processServiceSamples,
+      processWaitSamples
+    ),
+    ...taskRows,
+    ...resourceRows
   ];
 
   return lines.join('\n');
 }
 
-function createXesLikeLog(entries: SimulationLogEntry[]): string {
-  const events = entries.map((entry) => {
-    return {
-      time: entry.time,
-      conceptName: entry.eventType ?? entry.level,
-      caseId: entry.caseId,
-      elementId: entry.elementId,
-      elementName: entry.elementName,
-      message: entry.message
-    };
-  });
+function createEventLogCsv(result: ExportBase): string {
+  const elementTypes = new Map(result.elementMetrics.map((metric) => [metric.elementId, metric.type]));
+  const caseOutputs = new Map(result.cases.map((caseTrace) => [caseTrace.id, caseTrace.outputs]));
+  const taskStarts = new Map<string, SimulationLogEntry[]>();
+  const lines = [
+    ['CaseID', 'TaskID / EventID', 'TaskName / Event Name', 'Startzeit', 'Endzeit', 'Resource', 'Variables']
+      .map(csvCell)
+      .join(',')
+  ];
 
-  return JSON.stringify({ events }, null, 2);
+  for (const entry of result.log) {
+    const caseId = entry.caseId;
+    const elementId = entry.elementId;
+
+    if (caseId === undefined || !elementId) {
+      continue;
+    }
+
+    if (entry.eventType === 'TASK_START') {
+      pushEntry(taskStarts, eventKey(caseId, elementId), entry);
+      continue;
+    }
+
+    if (entry.eventType === 'TASK_COMPLETE') {
+      const start = shiftEntry(taskStarts, eventKey(caseId, elementId)) ?? entry;
+      lines.push([
+        caseId,
+        elementId,
+        entry.elementName ?? elementId,
+        formatSimulationDateTime(result, start.time),
+        formatSimulationDateTime(result, entry.time),
+        entry.resourceId ?? '',
+        variablesJson(entry.variables ?? caseOutputs.get(caseId))
+      ].map(csvCell).join(','));
+      continue;
+    }
+
+    if (entry.eventType === 'TOKEN_ENTER_ELEMENT' && isEventMetric(elementTypes.get(elementId) ?? '')) {
+      lines.push([
+        caseId,
+        elementId,
+        entry.elementName ?? elementId,
+        formatSimulationDateTime(result, entry.time),
+        '',
+        '',
+        variablesJson(entry.variables ?? caseOutputs.get(caseId))
+      ].map(csvCell).join(','));
+    }
+  }
+
+  return lines.join('\n');
 }
 
-function csvLine(metric: string, id: string, name: string, value: string | number): string {
-  return [metric, id, name, value].map(csvCell).join(',');
+function resultCsvLine(
+  type: string,
+  id: string,
+  name: string,
+  executions: number,
+  errors: number,
+  serviceSamples: number[],
+  waitSamples: number[]
+): string {
+  const service = sampleStats(serviceSamples);
+  const wait = sampleStats(waitSamples);
+
+  return [
+    type,
+    id,
+    name,
+    executions,
+    errors,
+    service.min,
+    service.max,
+    service.avg,
+    service.median,
+    wait.min,
+    wait.max,
+    wait.avg,
+    wait.median
+  ].map(csvCell).join(',');
 }
 
 function csvCell(value: string | number): string {
   const text = String(value);
 
   return /[",\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
+}
+
+function sampleStats(values: number[]): Record<'min' | 'max' | 'avg' | 'median', string> {
+  if (!values.length) {
+    return {
+      min: '',
+      max: '',
+      avg: '',
+      median: ''
+    };
+  }
+
+  const sorted = [...values].sort((a, b) => a - b);
+
+  return {
+    min: formatNumber(sorted[0]),
+    max: formatNumber(sorted[sorted.length - 1]),
+    avg: formatNumber(average(sorted)),
+    median: formatNumber(median(sorted))
+  };
+}
+
+function median(sortedValues: number[]): number {
+  if (!sortedValues.length) {
+    return 0;
+  }
+
+  const middle = Math.floor(sortedValues.length / 2);
+
+  if (sortedValues.length % 2) {
+    return sortedValues[middle];
+  }
+
+  return (sortedValues[middle - 1] + sortedValues[middle]) / 2;
+}
+
+function formatNumber(value: number): string {
+  if (!Number.isFinite(value)) {
+    return '';
+  }
+
+  return Number.isInteger(value) ? String(value) : value.toFixed(4).replace(/0+$/, '').replace(/\.$/, '');
+}
+
+function pushEntry(map: Map<string, SimulationLogEntry[]>, key: string, entry: SimulationLogEntry): void {
+  const entries = map.get(key) ?? [];
+
+  entries.push(entry);
+  map.set(key, entries);
+}
+
+function shiftEntry(map: Map<string, SimulationLogEntry[]>, key: string): SimulationLogEntry | undefined {
+  const entries = map.get(key);
+
+  if (!entries?.length) {
+    return undefined;
+  }
+
+  return entries.shift();
+}
+
+function eventKey(caseId: number, elementId: string): string {
+  return `${caseId}:${elementId}`;
+}
+
+function variablesJson(variables: Record<string, CaseOutputValue> | undefined): string {
+  return JSON.stringify(variables ?? {});
+}
+
+function formatSimulationDateTime(result: ExportBase, time: number | undefined): string {
+  if (time === undefined || !Number.isFinite(time)) {
+    return '';
+  }
+
+  const startDate = parseDateTimeLocal(result.options.startDateTime);
+
+  if (!startDate) {
+    return formatNumber(time);
+  }
+
+  const startTime = result.options.startTime ?? 0;
+  const date = addHours(startDate, Math.max(0, time - startTime));
+
+  return formatDateTimeLocal(date);
+}
+
+function parseDateTimeLocal(value: string | undefined): Date | undefined {
+  if (!value) {
+    return undefined;
+  }
+
+  const date = new Date(value);
+
+  return Number.isNaN(date.getTime()) ? undefined : date;
+}
+
+function addHours(date: Date, hours: number): Date {
+  return new Date(date.getTime() + hours * 60 * 60 * 1000);
+}
+
+function formatDateTimeLocal(date: Date): string {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  const hours = String(date.getHours()).padStart(2, '0');
+  const minutes = String(date.getMinutes()).padStart(2, '0');
+  const seconds = String(date.getSeconds()).padStart(2, '0');
+
+  return `${year}-${month}-${day} ${hours}:${minutes}:${seconds}`;
+}
+
+function isActivityMetric(type: string): boolean {
+  return /Task$/.test(type) || ['bpmn:SubProcess', 'bpmn:CallActivity', 'bpmn:Transaction'].includes(type);
+}
+
+function isEventMetric(type: string): boolean {
+  return /Event$/.test(type);
+}
+
+function cloneVariables(
+  variables: Record<string, CaseOutputValue> | undefined
+): Record<string, CaseOutputValue> | undefined {
+  if (!variables) {
+    return undefined;
+  }
+
+  return JSON.parse(JSON.stringify(variables)) as Record<string, CaseOutputValue>;
 }
 
 function average(values: number[]): number {

@@ -194,6 +194,7 @@ Wenn der bpmn-js-token-simulation-Schalter auf AN steht, spielt der obere Start-
 - Durchlaufzeit pro Prozessinstanz
 - Aktivitätsauslastung
 - Wartezeiten und Bearbeitungszeiten
+- Ressourcen-Auslastung mit Task-Anzahl, Fehlern, Bearbeitungszeit- und Wartezeitverteilungen je Ressource
 - Token-Anzahl pro Element
 - Pfadwahrscheinlichkeiten
 - Fehlerhäufigkeiten
@@ -201,7 +202,7 @@ Wenn der bpmn-js-token-simulation-Schalter auf AN steht, spielt der obere Start-
 - Deadlock-Verdachtsfälle
 - nicht konsumierte Tokens am Simulationsende
 
-Exporte sind als JSON, CSV und XES-ähnliches Event Log vorbereitet.
+Exporte sind als JSON, Simulation Results CSV und Event Log CSV vorbereitet. Das Event Log CSV enthält CaseID, Task-/Event-ID, Name, Startzeit, Endzeit für Tasks, Resource für Tasks und die aktuellen Prozessvariablen als JSON-String.
 
 ## Beispielmodell
 

@@ -200,6 +200,17 @@ export type ElementMetrics = {
   unsupported: boolean;
 };
 
+export type ResourceMetrics = {
+  resourceId: string;
+  name: string;
+  taskCount: number;
+  errors: number;
+  waitTime: number;
+  waitTimeSamples?: number[];
+  serviceTime: number;
+  serviceTimeSamples?: number[];
+};
+
 export type FlowMetrics = {
   flowId: string;
   name: string;
@@ -215,6 +226,8 @@ export type SimulationLogEntry = {
   message: string;
   elementId?: string;
   elementName?: string;
+  resourceId?: string;
+  variables?: Record<string, CaseOutputValue>;
   time?: number;
 };
 
@@ -237,7 +250,8 @@ export type PathProbability = {
 export type SimulationExports = {
   json: string;
   csv: string;
-  xesLike: string;
+  simulationResultsCsv: string;
+  eventLogCsv: string;
 };
 
 export type SimulationResult = {
@@ -255,6 +269,7 @@ export type SimulationResult = {
   cycleTimeMax: number;
   throughputPerTimeUnit: number;
   elementMetrics: ElementMetrics[];
+  resourceMetrics: ResourceMetrics[];
   flowMetrics: FlowMetrics[];
   log: SimulationLogEntry[];
   warnings: string[];

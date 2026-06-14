@@ -454,6 +454,18 @@ select {
   text-align: right;
 }
 
+.stats-table small {
+  display: block;
+  margin-top: 4px;
+  color: #59625f;
+  font-weight: 500;
+  line-height: 1.35;
+}
+
+.resource-stats-table td {
+  vertical-align: top;
+}
+
 .export-buttons {
   display: flex;
   flex-wrap: wrap;

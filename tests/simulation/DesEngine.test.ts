@@ -121,6 +121,50 @@ test('DES samples output objects for completed tasks', () => {
   });
 });
 
+test('DES exports event log CSV and simulation result CSV with resource metrics', () => {
+  const model = createLinearModel();
+  const task = model.nodes.get('task');
+
+  if (!task) {
+    throw new Error('task missing');
+  }
+
+  task.kind = 'serviceTask';
+  task.params.resource = {
+    resourceId: 'worker',
+    capacity: 1
+  };
+  task.params.outputObject = {
+    fields: [
+      {
+        key: 'status',
+        type: 'string',
+        generator: 'fixed',
+        value: 'done'
+      }
+    ]
+  };
+
+  const result = new DesEngine(model, {
+    numberOfRuns: 1,
+    randomSeed: 1,
+    startDateTime: '2026-06-15T08:00',
+    startTime: 8,
+    animationSpeed: 1,
+    collectTraces: true
+  }).run();
+  const resource = result.resourceMetrics.find((metric) => metric.resourceId === 'worker');
+
+  assert.equal(resource?.taskCount, 1);
+  assert.equal(resource?.errors, 0);
+  assert.equal(resource?.serviceTime, 5);
+  assert.match(result.exports.eventLogCsv, /CaseID,TaskID \/ EventID,TaskName \/ Event Name,Startzeit,Endzeit,Resource,Variables/);
+  assert.match(result.exports.eventLogCsv, /1,task,Task,2026-06-15 08:00:00,2026-06-15 08:05:00,worker/);
+  assert.match(result.exports.eventLogCsv, /status/);
+  assert.match(result.exports.simulationResultsCsv, /Task,task,Task,1,0,5,5,5,5,0,0,0,0/);
+  assert.match(result.exports.simulationResultsCsv, /Resource,worker,worker,1,0,5,5,5,5,0,0,0,0/);
+});
+
 test('DES routes XOR conditions with variables from previous output objects', () => {
   const model = createConditionModel();
 

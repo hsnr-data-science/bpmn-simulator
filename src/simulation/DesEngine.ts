@@ -353,6 +353,12 @@ export class DesEngine {
 
     this.statistics.recordCompletion(node);
     this.captureOutput(payload.token.caseId, node);
+    this.statistics.updateLastEventVariables(
+      payload.token.caseId,
+      node.id,
+      'TASK_COMPLETE',
+      this.tokens.getCase(payload.token.caseId)?.outputs
+    );
     this.queue.schedule('TOKEN_LEAVE_ELEMENT', time, {
       token: payload.token,
       elementId: node.id
@@ -522,17 +528,20 @@ export class DesEngine {
   }
 
   private recordEvent(event: SimulationEvent): void {
-    const payload = event.payload as Partial<TokenPayload & ElementTokenPayload & CaseArrivalPayload>;
+    const payload = event.payload as Partial<TokenPayload & ElementTokenPayload & CaseArrivalPayload & TaskCompletePayload>;
     const token = payload.token;
     const elementId = payload.elementId ?? token?.elementId ?? payload.startNodeId;
     const node = elementId ? this.interpreter.getNode(elementId) : undefined;
     const caseId = token?.caseId ?? payload.caseId;
+    const caseState = caseId !== undefined ? this.tokens.getCase(caseId) : undefined;
 
     this.statistics.event(event.type, event.type, {
       time: event.time,
       caseId,
       elementId,
-      elementName: node?.name
+      elementName: node?.name,
+      resourceId: payload.resourceId ?? node?.params.resource?.resourceId,
+      variables: caseState?.outputs
     });
   }
 }
