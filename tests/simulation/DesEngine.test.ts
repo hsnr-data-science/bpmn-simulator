@@ -12,7 +12,7 @@ test('DES draws fixed task duration and completes the process after that duratio
   }).run();
 
   assert.equal(result.completedCases, 1);
-  assert.equal(result.cases[0].cycleTime, 5);
+  assert.equal(result.cases[0].cycleTime, 5 / 60);
   assert.equal(result.elementMetrics.find((metric) => metric.elementId === 'task')?.serviceTime, 5);
 });
 
@@ -32,7 +32,7 @@ test('DES uses resource calendars for task start and working-time completion', (
   };
   task.params.duration = {
     type: 'fixed',
-    mean: 3
+    mean: 180
   };
 
   const result = new DesEngine(model, {
@@ -44,7 +44,10 @@ test('DES uses resource calendars for task start and working-time completion', (
 
   assert.equal(result.completedCases, 1);
   assert.equal(result.cases[0].cycleTime, 33);
-  assert.equal(result.elementMetrics.find((metric) => metric.elementId === 'task')?.waitTime, 8);
+  const taskMetrics = result.elementMetrics.find((metric) => metric.elementId === 'task');
+
+  assert.equal(taskMetrics?.waitTime, 480);
+  assert.equal(taskMetrics?.serviceTime, 180);
 });
 
 test('DES reports standard deviation for task waiting times', () => {

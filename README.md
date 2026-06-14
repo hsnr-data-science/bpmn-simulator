@@ -2,7 +2,7 @@
 
 Leichtgewichtige webbasierte BPMN-Simulationsumgebung auf Basis von `bpmn-js`, `bpmn-js-token-simulation` und `bpmn-js-properties-panel`.
 
-Die Token-Simulation bleibt als bpmn-js-Modul eingebunden. Der zusätzliche DES-Kern liest stochastische Simulationsparameter aus BPMN Extension Elements im Namespace `https://hsnr.de/data-science/bpmn/simulation` und führt keine externen Service-, User- oder Script-Task-Aktionen aus. Service Tasks, User Tasks und andere Activities werden ausschließlich über Dauer, Fehler, Retry und Output simuliert.
+Die Token-Simulation bleibt als bpmn-js-Modul eingebunden. Der zusätzliche DES-Kern liest stochastische Simulationsparameter aus BPMN Extension Elements im Namespace `https://hsnr.de/data-science/bpmn/simulation` und führt keine externen Service-, User- oder Script-Task-Aktionen aus. Service Tasks, User Tasks und andere Activities werden ausschließlich über Dauer, Fehler, Retry und Output simuliert. Bearbeitungszeiten und Delay-Dauern werden in Minuten konfiguriert; die interne DES-Uhr bleibt fuer Kalender, Arbeitszeiten und Datum/Uhrzeit in Stunden.
 
 ## Start
 
@@ -108,7 +108,7 @@ Die Parameter werden im BPMN XML unter `bpmn:extensionElements` gespeichert:
 
 Editierbar im Properties Panel sind:
 
-- Tasks: dynamische Dauerverteilung `fixed`, `uniform`, `normal`, `exponential`, `triangular`; je nach Auswahl werden nur die passenden Parameterfelder angezeigt. Dazu kommen Ressourcenauswahl per Dropdown, Fehlerwahrscheinlichkeit, Retry-Anzahl und Retry-Delay.
+- Tasks: dynamische Dauerverteilung `fixed`, `uniform`, `normal`, `exponential`, `triangular`; je nach Auswahl werden nur die passenden Parameterfelder angezeigt. Dauerwerte sind Minuten und erlauben Dezimalzahlen, z. B. `0.1` fuer 6 Sekunden. Dazu kommen Ressourcenauswahl per Dropdown, Fehlerwahrscheinlichkeit, Retry-Anzahl und Retry-Delay.
 - User Tasks, Script Tasks, Receive Tasks und Service Tasks: einfache Output-Objekte als Key-Value-Liste.
 - Service Tasks: zusaetzlich Fehlerwahrscheinlichkeit und mögliche Fehlercodes; stochastische Outputs werden ueber Output-Objects modelliert.
 - Sequence Flows: JavaScript-Condition als BPMN `conditionExpression` im Documentation-Bereich und Branch-Wahrscheinlichkeit im DES-Bereich für XOR-Gateways ohne Bedingungen.
@@ -141,7 +141,7 @@ TASK_FAILED
 RETRY_TASK
 ```
 
-`SimulationConfig` enthält `numberOfRuns`, `maxSimulationTime`, `randomSeed`, `animationSpeed` und `collectTraces`.
+`SimulationConfig` enthält `numberOfRuns`, optionales `maxSimulationTime`, `startTime`, `startDateTime`, `endDateTime`, `randomSeed`, `animationSpeed` und `collectTraces`. Die UI berechnet den optionalen Zeithorizont aus der eingestellten Endzeit; eine leere Endzeit bedeutet unbegrenzt.
 
 ## BPMN-Unterstützung
 
@@ -177,13 +177,15 @@ Wenn keine Bedingungen vorhanden sind, nutzt der Interpreter `branchProbability`
 Die Oberfläche enthält:
 
 - BPMN Modeler mit Properties Panel
-- Simulation Control Panel mit Start, Pause, Step, Stop, Reset und Run Monte Carlo
-- Einstellungen für Anzahl Cases, Seed, maximale Simulationszeit und Animationsgeschwindigkeit
+- Simulation Control Panel mit Start, Stop und Reset
+- Einstellungen für Anzahl Cases, Seed, Startzeit, optionale Endzeit, aktuelle Simulationszeit und Animationsgeschwindigkeit
 - logarithmischen Speed-Regler mit den Stufen `1`, `10`, `100`, `1000` und `10000`
 - Ressourcenbereich zum Bearbeiten von ID, Name, Kapazität, Wochentagen und stundenweisen Arbeitszeitbereichen
+- einklappbare linke Sidebar-Bereiche fuer Übersicht, Ressourcen, Bottlenecks, Pfade, Statistik, Event Log, Warnungen und Export
+- größenänderbare linke und rechte Sidebar
 - Ergebnisbereich mit Statistik-Tabelle, Event Log, Warnungen und Export Buttons
 
-Wenn der bpmn-js-token-simulation-Schalter auf AN steht, spielt der obere Start-Button den DES-Lauf als Token-Animation im Diagramm ab. Sequence Flows nutzen dabei die Token-Animation der bpmn-js-Erweiterung; aktive BPMN-Elemente werden zusätzlich mit DES-Tokens und Task-Markierungen hervorgehoben. Die bpmn-js-token-simulation-Popup-Controls fuer Task-Pausen und Gateway-Umschaltungen werden ausgeblendet; Event-Trigger bleiben sichtbar. Waehrend des Abspielens aktualisieren sich Statistik, Task-Wartezeitboxen, Event-/Gateway-Haeufigkeiten, Aktivitaetsfarben und Kantenstaerken fortlaufend.
+Wenn der bpmn-js-token-simulation-Schalter auf AN steht, spielt der obere Start-Button den DES-Lauf als Token-Animation im Diagramm ab. Der urspruengliche interaktive Simulator aus bpmn-js-token-simulation wird nicht geladen; dessen Event-Trigger, Task-Pausen, Gateway-Umschaltungen, Reset/Pause-Controls und Event-Log sind entfernt. Waehrend des Abspielens aktualisieren sich Statistik, Task-Wartezeitboxen, Task-Fehlerzaehler, Event-/Gateway-Haeufigkeiten, Aktivitaetsfarben und Kantenstaerken fortlaufend.
 
 ## Statistik und Export
 

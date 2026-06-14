@@ -10,6 +10,7 @@ type Overlays = {
 type Canvas = {
   addMarker(elementId: string, marker: string): void;
   removeMarker(elementId: string, marker: string): void;
+  getContainer(): HTMLElement;
 };
 
 export class HeatmapOverlayManager {
@@ -18,6 +19,7 @@ export class HeatmapOverlayManager {
   private readonly tokenOverlays: TokenOverlayManager;
   private overlayIds: string[] = [];
   private heatmapMarkers = new Map<string, Set<string>>();
+  private styledFlowIds = new Set<string>();
 
   constructor(overlays: Overlays, canvas: Canvas, tokenOverlays: TokenOverlayManager) {
     this.overlays = overlays;
@@ -31,6 +33,12 @@ export class HeatmapOverlayManager {
     }
 
     this.overlayIds = [];
+
+    for (const flowId of this.styledFlowIds) {
+      this.setFlowStrokeWidth(flowId);
+    }
+
+    this.styledFlowIds.clear();
 
     for (const [elementId, markers] of this.heatmapMarkers.entries()) {
       for (const marker of markers) {
@@ -47,7 +55,7 @@ export class HeatmapOverlayManager {
 
     const taskMetrics = result.elementMetrics.filter((metric) => isActivityMetric(metric.type));
     const maxAverageWait = Math.max(...taskMetrics.map((metric) => averageWait(metric)), 0);
-    const maxFlowCount = Math.max(...result.flowMetrics.map((metric) => metric.count), 0);
+    const caseTotal = Math.max(1, result.options.numberOfRuns, result.cases.length);
     const maxEventGatewayVisits = Math.max(
       ...result.elementMetrics
         .filter((metric) => isEventOrGatewayMetric(metric.type))
@@ -64,7 +72,7 @@ export class HeatmapOverlayManager {
         continue;
       }
 
-      this.addFlowFrequencyMarker(metric.flowId, maxFlowCount ? metric.count / maxFlowCount : 0);
+      this.addFlowFrequencyMarker(metric.flowId, metric.count / caseTotal);
     }
 
     for (const metric of result.elementMetrics) {
@@ -86,7 +94,8 @@ export class HeatmapOverlayManager {
 
       if (isActivityMetric(metric.type)) {
         this.addActivityWaitMarker(metric.elementId, waitIntensity);
-        this.addTaskStatisticsOverlay(metric.elementId, avgWait, metric.waitTimeStddev);
+        this.addTaskStatisticsOverlay(metric);
+        this.addTaskErrorOverlay(metric.elementId, metric.errors);
         continue;
       }
 
@@ -100,22 +109,20 @@ export class HeatmapOverlayManager {
     }
   }
 
-  private addTaskStatisticsOverlay(
-    elementId: string,
-    avgWait: number,
-    waitStddev: number
-  ): void {
+  private addTaskStatisticsOverlay(metric: SimulationResult['elementMetrics'][number]): void {
+    const avgWait = average(metric.waitTimeSamples ?? []);
+    const waitStddev = metric.waitTimeStddev;
     const html = [
       '<div class="des-task-stat-overlay">',
-      `<span title="Mittlere Wartezeit">W ${formatNumber(avgWait)}</span>`,
-      `<span title="Standardabweichung Wartezeit">Std ${formatNumber(waitStddev)}</span>`,
+      `<span title="Mittlere Wartezeit in Minuten">W ${formatNumber(avgWait)}m</span>`,
+      `<span title="Standardabweichung Wartezeit in Minuten">Std ${formatNumber(waitStddev)}m</span>`,
       '</div>'
     ].join('');
 
     try {
-      const overlayId = this.overlays.add(elementId, 'bts-token-count', {
+      const overlayId = this.overlays.add(metric.elementId, 'bts-token-count', {
         position: {
-          bottom: -32,
+          bottom: 0,
           left: 0
         },
         html
@@ -138,8 +145,30 @@ export class HeatmapOverlayManager {
     try {
       const overlayId = this.overlays.add(elementId, 'bts-token-count', {
         position: {
-          top: -18,
-          right: -12
+          top: 0,
+          right: 0
+        },
+        html
+      });
+
+      this.overlayIds.push(overlayId);
+    } catch {
+      // Some semantic elements are intentionally invisible on the BPMN canvas.
+    }
+  }
+
+  private addTaskErrorOverlay(elementId: string, errors: number): void {
+    const html = [
+      '<div class="des-task-error-overlay">',
+      `<strong title="Fehleranzahl">${errors}</strong>`,
+      '</div>'
+    ].join('');
+
+    try {
+      const overlayId = this.overlays.add(elementId, 'bts-token-count', {
+        position: {
+          top: 0,
+          right: 0
         },
         html
       });
@@ -156,6 +185,7 @@ export class HeatmapOverlayManager {
 
   private addFlowFrequencyMarker(flowId: string, intensity: number): void {
     this.addMarker(flowId, flowMarkerForIntensity(intensity));
+    this.setFlowStrokeWidth(flowId, flowWidthForIntensity(intensity));
   }
 
   private addMarker(elementId: string, marker: string): void {
@@ -167,6 +197,23 @@ export class HeatmapOverlayManager {
     } catch {
       // Ignore non-rendered semantic elements.
     }
+  }
+
+  private setFlowStrokeWidth(flowId: string, width?: number): void {
+    const selector = `.djs-connection[data-element-id="${cssEscape(flowId)}"] .djs-visual > path`;
+    const path = this.canvas.getContainer().querySelector<SVGPathElement>(selector);
+
+    if (!path) {
+      return;
+    }
+
+    if (width === undefined) {
+      path.style.removeProperty('stroke-width');
+      return;
+    }
+
+    path.style.setProperty('stroke-width', `${width.toFixed(2)}pt`, 'important');
+    this.styledFlowIds.add(flowId);
   }
 }
 
@@ -214,7 +261,15 @@ function flowMarkerForIntensity(intensity: number): string {
   return 'des-flow-low';
 }
 
+function flowWidthForIntensity(intensity: number): number {
+  return 0.5 + Math.max(0, Math.min(1, intensity)) * 2.5;
+}
+
 function formatNumber(value: number): string {
+  if (!Number.isFinite(value)) {
+    return '-';
+  }
+
   if (value >= 100) {
     return value.toFixed(0);
   }
@@ -224,4 +279,18 @@ function formatNumber(value: number): string {
   }
 
   return value.toFixed(2);
+}
+
+function average(values: number[]): number {
+  if (!values.length) {
+    return 0;
+  }
+
+  return values.reduce((sum, value) => sum + value, 0) / values.length;
+}
+
+function cssEscape(value: string): string {
+  const css = globalThis.CSS as { escape?: (input: string) => string } | undefined;
+
+  return css?.escape ? css.escape(value) : value.replace(/["\\]/g, '\\$&');
 }

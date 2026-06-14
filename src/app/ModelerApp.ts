@@ -1,7 +1,6 @@
 import BpmnModeler from 'bpmn-js/lib/Modeler';
-import TokenSimulationModule from 'bpmn-js-token-simulation';
 import { BpmnPropertiesPanelModule, BpmnPropertiesProviderModule } from 'bpmn-js-properties-panel';
-import { createIcons, Download, FileJson, FilePlus, Pause, Play, Plus, RefreshCcw, RotateCcw, SkipForward, Square, Trash2, Upload } from 'lucide';
+import { createIcons, Download, FileJson, FilePlus, Play, Plus, RotateCcw, Square, Trash2, Upload } from 'lucide';
 import { buildBpmnGraph } from '../bpmn/BpmnGraphBuilder';
 import { defaultDiagram } from '../bpmn/defaultDiagram';
 import { readResourceCatalog } from '../bpmn/ExtensionElementReader';
@@ -19,11 +18,11 @@ import { SimulationRunner } from '../simulation/SimulationRunner';
 import type { BpmnBusinessObject, BpmnDefinitions, BpmnElement, BpmnFactory, Modeling } from '../types/bpmn';
 import type { ElementMetrics, SimulationResource, SimulationResult, Weekday } from '../types/simulation';
 import { SimulationPropertiesProviderModule } from '../properties/SimulationPropertiesProvider';
+import { DesTokenSimulationModule } from '../visualization/DesTokenSimulationModule';
 import { DesTokenAnimator } from '../visualization/DesTokenAnimator';
 import { HeatmapOverlayManager } from '../visualization/HeatmapOverlayManager';
 import { SimulationLogPanel } from '../visualization/SimulationLogPanel';
 import { TokenOverlayManager } from '../visualization/TokenOverlayManager';
-import { TokenSimulationContextPadFilterModule } from '../visualization/TokenSimulationContextPadFilter';
 
 type Canvas = {
   zoom(mode: string): void;
@@ -34,10 +33,13 @@ type Canvas = {
 };
 
 type Overlays = ConstructorParameters<typeof HeatmapOverlayManager>[0];
-type DesTokenAnimatorParameters = ConstructorParameters<typeof DesTokenAnimator>;
 
 type EventBus = {
-  on(event: string, callback: (event: { active?: boolean }) => void): void;
+  on(event: string, callback: (event: { active?: boolean; newSelection?: BpmnElement[] }) => void): void;
+};
+
+type ElementRegistry = {
+  get(elementId: string): BpmnElement | undefined;
 };
 
 type ToggleMode = {
@@ -54,20 +56,21 @@ type AppElements = {
   exportDiagram: HTMLButtonElement;
   exportResults: HTMLButtonElement;
   runSimulation: HTMLButtonElement;
-  pauseSimulation: HTMLButtonElement;
-  stepSimulation: HTMLButtonElement;
   stopSimulation: HTMLButtonElement;
   resetSimulation: HTMLButtonElement;
-  monteCarlo: HTMLButtonElement;
-  clearOverlays: HTMLButtonElement;
   addResource: HTMLButtonElement;
   exportJson: HTMLButtonElement;
   exportCsv: HTMLButtonElement;
   exportXes: HTMLButtonElement;
+  workspace: HTMLElement;
+  leftResizer: HTMLElement;
+  rightResizer: HTMLElement;
   fileInput: HTMLInputElement;
   caseCount: HTMLInputElement;
   seed: HTMLInputElement;
-  untilTime: HTMLInputElement;
+  simulationStartTime: HTMLInputElement;
+  simulationEndTime: HTMLInputElement;
+  simulationCurrentTime: HTMLInputElement;
   animationSpeed: HTMLInputElement;
   animationSpeedValue: HTMLElement;
   statusLine: HTMLElement;
@@ -95,6 +98,8 @@ export class ModelerApp {
   private readonly elements: AppElements;
   private readonly runner = new SimulationRunner();
   private lastResult: SimulationResult | undefined;
+  private displayedResult: SimulationResult | undefined;
+  private selectedTaskId: string | undefined;
   private tokenSimulationActive = false;
   private simulationRunId = 0;
 
@@ -109,8 +114,7 @@ export class ModelerApp {
         parent: '#properties'
       },
       additionalModules: [
-        TokenSimulationModule,
-        TokenSimulationContextPadFilterModule,
+        DesTokenSimulationModule,
         BpmnPropertiesPanelModule,
         BpmnPropertiesProviderModule,
         SimulationPropertiesProviderModule
@@ -130,15 +134,18 @@ export class ModelerApp {
     );
     this.tokenAnimator = new DesTokenAnimator(
       this.canvas,
-      this.modeler.get<DesTokenAnimatorParameters[1]>('elementRegistry'),
-      this.modeler.get<DesTokenAnimatorParameters[2]>('animation')
+      this.modeler.get<ConstructorParameters<typeof DesTokenAnimator>[1]>('elementRegistry')
     );
 
     this.elements = this.collectElements();
     this.eventLogPanel = new SimulationLogPanel(this.elements.eventLogList);
     this.warningPanel = new SimulationLogPanel(this.elements.warningList);
+    this.initializeSimulationTimes();
     this.bindEvents();
     this.bindTokenSimulationMode();
+    this.bindSelection();
+    this.bindCanvasSelectionFallback();
+    this.bindSidebarResizers();
     this.updateAnimationSpeedLabel();
   }
 
@@ -192,18 +199,6 @@ export class ModelerApp {
       void this.runSimulation();
     });
 
-    this.elements.monteCarlo.addEventListener('click', () => {
-      void this.runSimulation();
-    });
-
-    this.elements.stepSimulation.addEventListener('click', () => {
-      void this.runSimulation(1);
-    });
-
-    this.elements.pauseSimulation.addEventListener('click', () => {
-      this.setStatus('Pause ist vorbereitet; der aktuelle Runner arbeitet synchron.');
-    });
-
     this.elements.stopSimulation.addEventListener('click', () => {
       this.simulationRunId += 1;
       this.tokenAnimator.stop();
@@ -215,15 +210,11 @@ export class ModelerApp {
       this.tokenAnimator.stop();
       this.heatmapOverlays.clear();
       this.lastResult = undefined;
+      this.displayedResult = undefined;
       this.setExportButtons(false);
       this.renderEmptyResults();
+      this.updateCurrentSimulationTime();
       this.setStatus('Simulation zurueckgesetzt');
-    });
-
-    this.elements.clearOverlays.addEventListener('click', () => {
-      this.tokenAnimator.stop();
-      this.heatmapOverlays.clear();
-      this.setStatus('Overlays zurueckgesetzt');
     });
 
     this.elements.animationSpeed.addEventListener('input', () => {
@@ -231,6 +222,14 @@ export class ModelerApp {
 
       this.updateAnimationSpeedLabel();
       this.tokenAnimator.setSpeed(speed);
+    });
+
+    this.elements.simulationStartTime.addEventListener('change', () => {
+      this.updateCurrentSimulationTime();
+    });
+
+    this.elements.simulationEndTime.addEventListener('change', () => {
+      this.updateCurrentSimulationTime(this.displayedResult ?? this.lastResult);
     });
 
     this.elements.addResource.addEventListener('click', () => {
@@ -304,16 +303,19 @@ export class ModelerApp {
       this.tokenAnimator.stop();
       this.heatmapOverlays.clear();
       this.lastResult = undefined;
+      this.displayedResult = undefined;
+      this.selectedTaskId = undefined;
       this.setExportButtons(false);
       this.renderEmptyResults();
       this.renderResources();
+      this.updateCurrentSimulationTime();
       this.setStatus('Diagramm geladen');
     } catch (error) {
       this.setStatus(error instanceof Error ? error.message : 'Import fehlgeschlagen');
     }
   }
 
-  private async runSimulation(numberOfRunsOverride?: number): Promise<void> {
+  private async runSimulation(): Promise<void> {
     const runId = ++this.simulationRunId;
 
     try {
@@ -321,10 +323,23 @@ export class ModelerApp {
       const definitions = this.modeler.getDefinitions();
       const simModel = buildBpmnGraph(definitions as never);
       const animationSpeed = readAnimationSpeed(this.elements.animationSpeed);
+      const simulationStart = this.readSimulationStartDate();
+      const simulationEnd = readOptionalDateTimeLocal(this.elements.simulationEndTime);
+      const startTime = simulationOffsetHours(simulationStart);
+      const maxSimulationTime = simulationEnd && simulationEnd.getTime() > simulationStart.getTime()
+        ? startTime + hoursBetween(simulationStart, simulationEnd)
+        : undefined;
+      const numberOfRuns = readInteger(this.elements.caseCount, 250);
+
+      this.updateCurrentSimulationTime();
+
       const result = this.runner.run(simModel, {
-        numberOfRuns: numberOfRunsOverride ?? readInteger(this.elements.caseCount, 250),
+        numberOfRuns,
         randomSeed: readInteger(this.elements.seed, 42),
-        maxSimulationTime: readOptionalNumber(this.elements.untilTime),
+        maxSimulationTime,
+        startTime,
+        startDateTime: this.elements.simulationStartTime.value,
+        endDateTime: this.elements.simulationEndTime.value || undefined,
         animationSpeed,
         collectTraces: true
       });
@@ -339,6 +354,9 @@ export class ModelerApp {
         await this.tokenAnimator.play(result, animationSpeed, (progressResult) => {
           this.renderResults(progressResult);
           this.heatmapOverlays.render(progressResult);
+          this.setStatus(
+            `Token-Visualisierung t=${formatNumber(currentSimulationTime(progressResult))}, ${progressResult.completedCases}/${result.cases.length} Cases`
+          );
         });
 
         if (runId !== this.simulationRunId) {
@@ -361,6 +379,7 @@ export class ModelerApp {
   }
 
   private renderEmptyResults(): void {
+    this.displayedResult = undefined;
     this.elements.metricCompleted.textContent = '-';
     this.elements.metricFailed.textContent = '-';
     this.elements.metricAvgCycle.textContent = '-';
@@ -436,6 +455,7 @@ export class ModelerApp {
   }
 
   private renderResults(result: SimulationResult): void {
+    this.displayedResult = result;
     this.elements.metricCompleted.textContent = `${result.completedCases}`;
     this.elements.metricFailed.textContent = `${result.failedCases}`;
     this.elements.metricAvgCycle.textContent = formatNumber(result.cycleTimeAverage);
@@ -444,13 +464,14 @@ export class ModelerApp {
     this.renderBottlenecks(result.elementMetrics);
     this.renderPaths(result);
     this.renderStatsTable(result);
+    this.updateCurrentSimulationTime(result);
     this.eventLogPanel.render(result.log);
     this.warningPanel.render(result.log.filter((entry) => entry.level !== 'info'));
   }
 
   private renderBottlenecks(metrics: ElementMetrics[]): void {
     const top = metrics
-      .filter((metric) => metric.visits > 0)
+      .filter((metric) => metric.visits > 0 && isActivityMetricType(metric.type))
       .map((metric) => ({
         ...metric,
         avgWait: metric.visits ? metric.waitTime / metric.visits : 0,
@@ -464,8 +485,8 @@ export class ModelerApp {
         const item = document.createElement('li');
         item.innerHTML = `
           <span>${escapeHtml(metric.name)}</span>
-          <strong>${formatNumber(metric.avgWait + metric.avgService)}</strong>
-          <small>${metric.visits} visits, ${metric.errors} errors</small>
+          <strong>${formatNumber(metric.avgWait + metric.avgService)} min</strong>
+          <small>Wait+Service avg: W ${formatNumber(metric.avgWait)} min, S ${formatNumber(metric.avgService)} min · ${metric.visits} visits, ${metric.errors} errors</small>
         `;
         return item;
       })
@@ -489,15 +510,12 @@ export class ModelerApp {
   }
 
   private renderStatsTable(result: SimulationResult): void {
-    const rows: Array<[string, string | number]> = [
-      ['Completed', result.completedCases],
-      ['Failed', result.failedCases],
-      ['Avg cycle time', formatNumber(result.cycleTimeAverage)],
-      ['P90 cycle time', formatNumber(result.cycleTimeP90)],
-      ['Throughput', formatNumber(result.throughputPerTimeUnit)],
-      ['Deadlock suspicion', result.deadlockSuspicions],
-      ['Unconsumed tokens', result.unconsumedTokens]
-    ];
+    const selectedTaskMetric = this.selectedTaskId
+      ? result.elementMetrics.find((metric) => metric.elementId === this.selectedTaskId)
+      : undefined;
+    const rows = this.selectedTaskId
+      ? this.createTaskStatsRows(result, selectedTaskMetric)
+      : createProcessStatsRows(result);
 
     this.elements.statsTable.replaceChildren(
       ...rows.map(([name, value]) => {
@@ -514,6 +532,153 @@ export class ModelerApp {
     );
   }
 
+  private createTaskStatsRows(
+    result: SimulationResult,
+    metric: ElementMetrics | undefined
+  ): Array<[string, string | number]> {
+    const taskName = metric?.name ?? this.getElementLabel(this.selectedTaskId) ?? this.selectedTaskId ?? 'Task';
+    const service = describeSamples(metric?.serviceTimeSamples ?? []);
+    const wait = describeSamples(metric?.waitTimeSamples ?? []);
+    const outputVariables = this.selectedTaskId ? collectOutputVariables(result, this.selectedTaskId) : [];
+
+    return [
+      ['Scope', `Task: ${taskName}`],
+      ['Anzahl Ausfuehrungen', metric?.visits ?? 0],
+      ['Bearbeitungszeiten (min)', formatSampleDescription(service)],
+      ['Wartezeiten (min)', formatSampleDescription(wait)],
+      ['Anzahl Fehler', metric?.errors ?? 0],
+      ['Output-Variablen', outputVariables.length ? outputVariables.join(', ') : '-']
+    ];
+  }
+
+  private bindSelection(): void {
+    const eventBus = this.modeler.get<EventBus>('eventBus');
+
+    eventBus.on('selection.changed', (event) => {
+      const selected = event.newSelection?.[0];
+
+      this.selectedTaskId = selected && isTaskElement(selected) ? selected.id : undefined;
+      this.renderCurrentStatsTable();
+    });
+  }
+
+  private bindCanvasSelectionFallback(): void {
+    const container = this.canvas.getContainer();
+    const elementRegistry = this.modeler.get<ElementRegistry>('elementRegistry');
+
+    container.addEventListener('click', (event) => {
+      const target = event.target as Element | null;
+      const diagramElement = target?.closest<HTMLElement>('.djs-element[data-element-id]');
+
+      if (!diagramElement) {
+        if (target?.closest('#canvas')) {
+          this.selectedTaskId = undefined;
+          this.renderCurrentStatsTable();
+        }
+
+        return;
+      }
+
+      const element = elementRegistry.get(diagramElement.dataset.elementId ?? '');
+      this.selectedTaskId = element && isTaskElement(element) ? element.id : undefined;
+      this.renderCurrentStatsTable();
+    });
+  }
+
+  private renderCurrentStatsTable(): void {
+    const result = this.displayedResult ?? this.lastResult;
+
+    if (result) {
+      this.renderStatsTable(result);
+    } else {
+      this.elements.statsTable.replaceChildren();
+    }
+  }
+
+  private bindSidebarResizers(): void {
+    this.bindSidebarResizer(this.elements.leftResizer, 'left');
+    this.bindSidebarResizer(this.elements.rightResizer, 'right');
+  }
+
+  private bindSidebarResizer(handle: HTMLElement, side: 'left' | 'right'): void {
+    handle.addEventListener('pointerdown', (event) => {
+      event.preventDefault();
+
+      const panel = side === 'left' ? this.elements.workspace.querySelector<HTMLElement>('.simulation-panel') : this.elements.workspace.querySelector<HTMLElement>('.properties-panel');
+      const startX = event.clientX;
+      const startWidth = panel?.getBoundingClientRect().width ?? (side === 'left' ? 300 : 340);
+      const minWidth = side === 'left' ? 220 : 260;
+      const maxWidth = side === 'left' ? 560 : 620;
+
+      handle.setPointerCapture(event.pointerId);
+      document.body.classList.add('is-resizing-sidebar');
+
+      const onMove = (moveEvent: PointerEvent) => {
+        const delta = moveEvent.clientX - startX;
+        const nextWidth = side === 'left'
+          ? clamp(startWidth + delta, minWidth, maxWidth)
+          : clamp(startWidth - delta, minWidth, maxWidth);
+
+        this.elements.workspace.style.setProperty(
+          side === 'left' ? '--left-sidebar-width' : '--right-sidebar-width',
+          `${Math.round(nextWidth)}px`
+        );
+      };
+      const onUp = () => {
+        document.body.classList.remove('is-resizing-sidebar');
+        window.removeEventListener('pointermove', onMove);
+        window.removeEventListener('pointerup', onUp);
+        window.removeEventListener('pointercancel', onUp);
+      };
+
+      window.addEventListener('pointermove', onMove);
+      window.addEventListener('pointerup', onUp);
+      window.addEventListener('pointercancel', onUp);
+    });
+  }
+
+  private initializeSimulationTimes(): void {
+    this.elements.simulationStartTime.value = formatDateTimeLocal(getDefaultSimulationStart());
+    this.elements.simulationEndTime.value = '';
+    this.updateCurrentSimulationTime();
+  }
+
+  private readSimulationStartDate(): Date {
+    const parsed = readOptionalDateTimeLocal(this.elements.simulationStartTime);
+
+    if (parsed) {
+      return parsed;
+    }
+
+    const fallback = getDefaultSimulationStart();
+    this.elements.simulationStartTime.value = formatDateTimeLocal(fallback);
+
+    return fallback;
+  }
+
+  private updateCurrentSimulationTime(result?: SimulationResult): void {
+    const startDate = this.readSimulationStartDate();
+
+    if (!result) {
+      this.elements.simulationCurrentTime.value = formatDateTimeDisplay(startDate);
+      return;
+    }
+
+    const startTime = result.options.startTime ?? simulationOffsetHours(startDate);
+    const elapsed = Math.max(0, currentSimulationTime(result) - startTime);
+    this.elements.simulationCurrentTime.value = formatDateTimeDisplay(addHours(startDate, elapsed));
+  }
+
+  private getElementLabel(elementId: string | undefined): string | undefined {
+    if (!elementId) {
+      return undefined;
+    }
+
+    const element = this.modeler.get<ElementRegistry>('elementRegistry').get(elementId);
+
+    return element?.businessObject?.name || element?.businessObject?.id || element?.id;
+  }
+
   private collectElements(): AppElements {
     return {
       newDiagram: getElement('new-diagram'),
@@ -521,20 +686,21 @@ export class ModelerApp {
       exportDiagram: getElement('export-diagram'),
       exportResults: getElement('export-results'),
       runSimulation: getElement('run-simulation'),
-      pauseSimulation: getElement('pause-simulation'),
-      stepSimulation: getElement('step-simulation'),
       stopSimulation: getElement('stop-simulation'),
       resetSimulation: getElement('reset-simulation'),
-      monteCarlo: getElement('monte-carlo'),
-      clearOverlays: getElement('clear-overlays'),
       addResource: getElement('add-resource'),
       exportJson: getElement('export-json'),
       exportCsv: getElement('export-csv'),
       exportXes: getElement('export-xes'),
+      workspace: getElement('workspace'),
+      leftResizer: getElement('left-sidebar-resizer'),
+      rightResizer: getElement('right-sidebar-resizer'),
       fileInput: getElement('file-input'),
       caseCount: getElement('case-count'),
       seed: getElement('seed'),
-      untilTime: getElement('until-time'),
+      simulationStartTime: getElement('simulation-start-time'),
+      simulationEndTime: getElement('simulation-end-time'),
+      simulationCurrentTime: getElement('simulation-current-time'),
       animationSpeed: getElement('animation-speed'),
       animationSpeedValue: getElement('animation-speed-value'),
       statusLine: getElement('status-line'),
@@ -616,32 +782,27 @@ function createShellMarkup(): string {
             <span>Seed</span>
             <input id="seed" type="number" min="1" step="1" value="42" />
           </label>
-          <label>
-            <span>Horizon</span>
-            <input id="until-time" type="number" min="0" step="1" placeholder="offen" />
+          <label class="datetime-control">
+            <span>Startzeit</span>
+            <input id="simulation-start-time" class="datetime-input" type="datetime-local" />
+          </label>
+          <label class="datetime-control">
+            <span>Ende</span>
+            <input id="simulation-end-time" class="datetime-input" type="datetime-local" />
+          </label>
+          <label class="datetime-control current-time-control">
+            <span>Sim-Zeit</span>
+            <input id="simulation-current-time" class="datetime-input current-time-input" type="text" readonly />
           </label>
           <button id="run-simulation" class="primary-button">
             <i data-lucide="play"></i>
             <span>Start</span>
-          </button>
-          <button id="pause-simulation" class="icon-button" title="Pause" aria-label="Pause">
-            <i data-lucide="pause"></i>
-          </button>
-          <button id="step-simulation" class="icon-button" title="Step" aria-label="Step">
-            <i data-lucide="skip-forward"></i>
           </button>
           <button id="stop-simulation" class="icon-button" title="Stop" aria-label="Stop">
             <i data-lucide="square"></i>
           </button>
           <button id="reset-simulation" class="icon-button" title="Reset" aria-label="Reset">
             <i data-lucide="rotate-ccw"></i>
-          </button>
-          <button id="monte-carlo" class="primary-button secondary-button">
-            <i data-lucide="play"></i>
-            <span>Monte Carlo</span>
-          </button>
-          <button id="clear-overlays" class="icon-button" title="Overlays zuruecksetzen" aria-label="Overlays zuruecksetzen">
-            <i data-lucide="refresh-ccw"></i>
           </button>
           <label class="speed-control">
             <span>Speed</span>
@@ -657,30 +818,37 @@ function createShellMarkup(): string {
           </datalist>
         </div>
       </header>
-      <section class="workspace">
+      <section id="workspace" class="workspace">
         <aside class="simulation-panel">
           <div class="panel-header">
             <h1>BPMN DES</h1>
             <p id="status-line">Bereit</p>
           </div>
-          <div class="metric-grid">
-            <article>
-              <span>Completed</span>
-              <strong id="metric-completed">-</strong>
-            </article>
-            <article>
-              <span>Failed</span>
-              <strong id="metric-failed">-</strong>
-            </article>
-            <article>
-              <span>Avg CT</span>
-              <strong id="metric-avg-cycle">-</strong>
-            </article>
-            <article>
-              <span>P90 CT</span>
-              <strong id="metric-p90-cycle">-</strong>
-            </article>
-          </div>
+          <section class="panel-section collapsible-section">
+            <details open>
+              <summary class="section-title">
+                <h2>Overview</h2>
+              </summary>
+              <div class="metric-grid">
+                <article>
+                  <span>Completed</span>
+                  <strong id="metric-completed">-</strong>
+                </article>
+                <article>
+                  <span>Failed</span>
+                  <strong id="metric-failed">-</strong>
+                </article>
+                <article>
+                  <span>Avg CT</span>
+                  <strong id="metric-avg-cycle">-</strong>
+                </article>
+                <article>
+                  <span>P90 CT</span>
+                  <strong id="metric-p90-cycle">-</strong>
+                </article>
+              </div>
+            </details>
+          </section>
           <section class="panel-section collapsible-section">
             <details open>
               <summary class="section-title">
@@ -694,53 +862,67 @@ function createShellMarkup(): string {
               <div id="resource-list" class="resource-list"></div>
             </details>
           </section>
-          <section class="panel-section">
-            <div class="section-title">
-              <h2>Bottlenecks</h2>
-            </div>
-            <ol id="bottleneck-list" class="rank-list"></ol>
+          <section class="panel-section collapsible-section">
+            <details open>
+              <summary class="section-title">
+                <h2>Bottlenecks</h2>
+              </summary>
+              <ol id="bottleneck-list" class="rank-list"></ol>
+            </details>
           </section>
-          <section class="panel-section">
-            <div class="section-title">
-              <h2>Paths</h2>
-            </div>
-            <ol id="path-list" class="rank-list"></ol>
+          <section class="panel-section collapsible-section">
+            <details open>
+              <summary class="section-title">
+                <h2>Paths</h2>
+              </summary>
+              <ol id="path-list" class="rank-list"></ol>
+            </details>
           </section>
-          <section class="panel-section">
-            <div class="section-title">
-              <h2>Statistics</h2>
-            </div>
-            <table class="stats-table">
-              <tbody id="stats-table"></tbody>
-            </table>
+          <section class="panel-section collapsible-section">
+            <details open>
+              <summary class="section-title">
+                <h2>Statistics</h2>
+              </summary>
+              <table class="stats-table">
+                <tbody id="stats-table"></tbody>
+              </table>
+            </details>
           </section>
-          <section class="panel-section">
-            <div class="section-title">
-              <h2>Event Log</h2>
-            </div>
-            <ul id="event-log-list" class="warning-list event-log-list"></ul>
+          <section class="panel-section collapsible-section">
+            <details open>
+              <summary class="section-title">
+                <h2>Event Log</h2>
+              </summary>
+              <ul id="event-log-list" class="warning-list event-log-list"></ul>
+            </details>
           </section>
-          <section class="panel-section">
-            <div class="section-title">
-              <h2>Warnings</h2>
-            </div>
-            <ul id="warning-list" class="warning-list"></ul>
+          <section class="panel-section collapsible-section">
+            <details open>
+              <summary class="section-title">
+                <h2>Warnings</h2>
+              </summary>
+              <ul id="warning-list" class="warning-list"></ul>
+            </details>
           </section>
-          <section class="panel-section">
-            <div class="section-title">
-              <h2>Export</h2>
-            </div>
-            <div class="export-buttons">
-              <button id="export-json" class="text-button" disabled>JSON</button>
-              <button id="export-csv" class="text-button" disabled>CSV</button>
-              <button id="export-xes" class="text-button" disabled>XES-like</button>
-            </div>
-            <ul id="log-list" class="warning-list hidden-log"></ul>
+          <section class="panel-section collapsible-section">
+            <details open>
+              <summary class="section-title">
+                <h2>Export</h2>
+              </summary>
+              <div class="export-buttons">
+                <button id="export-json" class="text-button" disabled>JSON</button>
+                <button id="export-csv" class="text-button" disabled>CSV</button>
+                <button id="export-xes" class="text-button" disabled>XES-like</button>
+              </div>
+              <ul id="log-list" class="warning-list hidden-log"></ul>
+            </details>
           </section>
         </aside>
+        <div id="left-sidebar-resizer" class="sidebar-resizer left-sidebar-resizer" role="separator" aria-label="Linke Sidebar-Groesse aendern"></div>
         <section class="diagram-shell">
           <div id="canvas"></div>
         </section>
+        <div id="right-sidebar-resizer" class="sidebar-resizer right-sidebar-resizer" role="separator" aria-label="Rechte Sidebar-Groesse aendern"></div>
         <aside id="properties" class="properties-panel"></aside>
       </section>
       <input id="file-input" class="hidden-input" type="file" accept=".bpmn,.xml" />
@@ -754,12 +936,9 @@ function createAppIcons(): void {
       Download,
       FileJson,
       FilePlus,
-      Pause,
       Play,
       Plus,
-      RefreshCcw,
       RotateCcw,
-      SkipForward,
       Square,
       Trash2,
       Upload
@@ -783,16 +962,6 @@ function readInteger(input: HTMLInputElement, fallback: number): number {
   return Number.isInteger(value) && value > 0 ? value : fallback;
 }
 
-function readOptionalNumber(input: HTMLInputElement): number | undefined {
-  if (!input.value) {
-    return undefined;
-  }
-
-  const value = Number(input.value);
-
-  return Number.isFinite(value) && value >= 0 ? value : undefined;
-}
-
 function readAnimationSpeed(input: HTMLInputElement): number {
   const index = Math.max(0, Math.min(ANIMATION_SPEEDS.length - 1, Math.round(Number(input.value) || 0)));
 
@@ -813,6 +982,153 @@ function formatNumber(value: number): string {
   }
 
   return value.toFixed(2);
+}
+
+function currentSimulationTime(result: SimulationResult): number {
+  if (result.currentTime !== undefined && Number.isFinite(result.currentTime)) {
+    return result.currentTime;
+  }
+
+  return result.log.reduce((time, entry) => Math.max(time, entry.time ?? 0), 0);
+}
+
+function createProcessStatsRows(result: SimulationResult): Array<[string, string | number]> {
+  return [
+    ['Scope', 'Prozess'],
+    ['Completed', result.completedCases],
+    ['Failed', result.failedCases],
+    ['Avg cycle time', formatNumber(result.cycleTimeAverage)],
+    ['P90 cycle time', formatNumber(result.cycleTimeP90)],
+    ['Throughput', formatNumber(result.throughputPerTimeUnit)],
+    ['Deadlock suspicion', result.deadlockSuspicions],
+    ['Unconsumed tokens', result.unconsumedTokens]
+  ];
+}
+
+function collectOutputVariables(result: SimulationResult, elementId: string): string[] {
+  const variables = new Set<string>();
+
+  for (const caseTrace of result.cases) {
+    const output = caseTrace.outputs[elementId];
+
+    if (!output) {
+      continue;
+    }
+
+    if (typeof output === 'object' && !Array.isArray(output)) {
+      for (const key of Object.keys(output)) {
+        variables.add(key);
+      }
+    } else {
+      variables.add('value');
+    }
+  }
+
+  return [...variables].sort();
+}
+
+function describeSamples(samples: number[]): Record<'min' | 'max' | 'median' | 'avg', string> {
+  if (!samples.length) {
+    return {
+      min: '-',
+      max: '-',
+      median: '-',
+      avg: '-'
+    };
+  }
+
+  const sorted = [...samples].sort((a, b) => a - b);
+
+  return {
+    min: formatNumber(sorted[0]),
+    max: formatNumber(sorted[sorted.length - 1]),
+    median: formatNumber(median(sorted)),
+    avg: formatNumber(sorted.reduce((sum, value) => sum + value, 0) / sorted.length)
+  };
+}
+
+function formatSampleDescription(samples: Record<'min' | 'max' | 'median' | 'avg', string>): string {
+  return `Min ${samples.min} Max ${samples.max} Median ${samples.median} Avg ${samples.avg}`;
+}
+
+function median(sortedValues: number[]): number {
+  if (!sortedValues.length) {
+    return 0;
+  }
+
+  const middle = Math.floor(sortedValues.length / 2);
+
+  if (sortedValues.length % 2) {
+    return sortedValues[middle];
+  }
+
+  return (sortedValues[middle - 1] + sortedValues[middle]) / 2;
+}
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.max(min, Math.min(max, value));
+}
+
+function getDefaultSimulationStart(now = new Date()): Date {
+  const start = new Date(now);
+  const day = start.getDay();
+  const daysUntilNextMonday = (8 - day) % 7 || 7;
+
+  start.setDate(start.getDate() + daysUntilNextMonday);
+  start.setHours(8, 0, 0, 0);
+
+  return start;
+}
+
+function readOptionalDateTimeLocal(input: HTMLInputElement): Date | undefined {
+  if (!input.value) {
+    return undefined;
+  }
+
+  const date = new Date(input.value);
+
+  return Number.isNaN(date.getTime()) ? undefined : date;
+}
+
+function formatDateTimeLocal(date: Date): string {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  const hours = String(date.getHours()).padStart(2, '0');
+  const minutes = String(date.getMinutes()).padStart(2, '0');
+
+  return `${year}-${month}-${day}T${hours}:${minutes}`;
+}
+
+function formatDateTimeDisplay(date: Date): string {
+  return new Intl.DateTimeFormat('de-DE', {
+    dateStyle: 'short',
+    timeStyle: 'short'
+  }).format(date);
+}
+
+function addHours(date: Date, hours: number): Date {
+  return new Date(date.getTime() + hours * 60 * 60 * 1000);
+}
+
+function hoursBetween(start: Date, end: Date): number {
+  return Math.max(0, (end.getTime() - start.getTime()) / (60 * 60 * 1000));
+}
+
+function simulationOffsetHours(date: Date): number {
+  const weekdayIndex = (date.getDay() + 6) % 7;
+
+  return weekdayIndex * 24 + date.getHours() + date.getMinutes() / 60 + date.getSeconds() / 3600;
+}
+
+function isTaskElement(element: BpmnElement): boolean {
+  const type = element.businessObject?.$type ?? '';
+
+  return isActivityMetricType(type);
+}
+
+function isActivityMetricType(type: string): boolean {
+  return /Task$/.test(type) || ['bpmn:SubProcess', 'bpmn:CallActivity', 'bpmn:Transaction'].includes(type);
 }
 
 function createResourceRow(resource: SimulationResource, index: number): HTMLElement {

@@ -22,10 +22,13 @@ export class StatisticsCollector {
   recordService(node: SimNode, waitTime: number, serviceTime: number): void {
     const metrics = this.getElementMetrics(node);
     const wait = Math.max(0, waitTime);
+    const service = Math.max(0, serviceTime);
 
     metrics.waitTime += wait;
+    metrics.waitTimeSamples?.push(wait);
     this.recordWaitTimeSample(node.id, wait);
-    metrics.serviceTime += Math.max(0, serviceTime);
+    metrics.serviceTime += service;
+    metrics.serviceTimeSamples?.push(service);
   }
 
   recordCompletion(node: SimNode): void {
@@ -110,6 +113,7 @@ export class StatisticsCollector {
     const deadlockSuspicions = cases.filter((caseTrace) => caseTrace.status === 'running').length;
     const unconsumedTokens = cases.reduce((sum, caseTrace) => sum + caseTrace.activeTokens, 0);
     const maxTime = Math.max(...cases.map((caseTrace) => caseTrace.endTime), currentTime, 0);
+    const elapsedTime = Math.max(0, maxTime - (options.startTime ?? 0));
     const warnings = this.logEntries
       .filter((entry) => entry.level === 'warning')
       .map((entry) => entry.message);
@@ -125,7 +129,7 @@ export class StatisticsCollector {
       return {
         elementId: metric.elementId,
         name: metric.name,
-        utilization: maxTime > 0 ? metric.serviceTime / maxTime : 0,
+        utilization: elapsedTime > 0 ? (metric.serviceTime / 60) / elapsedTime : 0,
         averageWaitTime: metric.visits ? metric.waitTime / metric.visits : 0,
         averageServiceTime: metric.completions ? metric.serviceTime / metric.completions : 0,
         tokenCount: metric.visits
@@ -135,6 +139,7 @@ export class StatisticsCollector {
     const baseResult = {
       startedAt,
       completedAt,
+      currentTime,
       options,
       processName: model.name,
       cases,
@@ -144,7 +149,7 @@ export class StatisticsCollector {
       cycleTimeP50: percentile(finishedCycleTimes, 0.5),
       cycleTimeP90: percentile(finishedCycleTimes, 0.9),
       cycleTimeMax: finishedCycleTimes[finishedCycleTimes.length - 1] ?? 0,
-      throughputPerTimeUnit: maxTime > 0 ? completedCases / maxTime : completedCases,
+      throughputPerTimeUnit: elapsedTime > 0 ? completedCases / elapsedTime : completedCases,
       elementMetrics,
       flowMetrics,
       log: this.logEntries,
@@ -183,7 +188,9 @@ export class StatisticsCollector {
       retries: 0,
       waitTime: 0,
       waitTimeStddev: 0,
+      waitTimeSamples: [],
       serviceTime: 0,
+      serviceTimeSamples: [],
       unsupported: !node.supported
     };
 

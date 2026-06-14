@@ -25,7 +25,7 @@ select {
 
 .app-shell {
   display: grid;
-  grid-template-rows: 56px minmax(0, 1fr);
+  grid-template-rows: auto minmax(0, 1fr);
   height: 100vh;
 }
 
@@ -33,7 +33,9 @@ select {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  flex-wrap: wrap;
   gap: 16px;
+  min-height: 56px;
   padding: 8px 12px;
   border-bottom: 1px solid #cfd7d3;
   background: #ffffff;
@@ -42,10 +44,13 @@ select {
 .toolbar-group {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 8px;
 }
 
 .run-controls {
+  flex: 1 1 720px;
+  justify-content: flex-end;
   min-width: 0;
 }
 
@@ -66,6 +71,24 @@ select {
   border-radius: 6px;
   color: #202329;
   background: #fbfcfb;
+}
+
+.run-controls .datetime-control {
+  grid-template-columns: auto 154px;
+}
+
+.run-controls .datetime-input {
+  width: 154px;
+}
+
+.run-controls .current-time-control {
+  grid-template-columns: auto 112px;
+}
+
+.run-controls .current-time-input {
+  width: 112px;
+  color: #134d44;
+  background: #eef5f2;
 }
 
 .run-controls .speed-control {
@@ -139,8 +162,26 @@ select {
 
 .workspace {
   display: grid;
-  grid-template-columns: 300px minmax(360px, 1fr) 340px;
+  grid-template-columns: var(--left-sidebar-width, 300px) 6px minmax(360px, 1fr) 6px var(--right-sidebar-width, 340px);
   min-height: 0;
+}
+
+.sidebar-resizer {
+  min-width: 6px;
+  cursor: col-resize;
+  background: #dbe3df;
+  transition: background 120ms ease;
+}
+
+.sidebar-resizer:hover,
+.sidebar-resizer:focus-visible,
+.is-resizing-sidebar .sidebar-resizer {
+  background: #8ca49c;
+}
+
+.is-resizing-sidebar {
+  cursor: col-resize;
+  user-select: none;
 }
 
 .simulation-panel,
@@ -180,6 +221,10 @@ select {
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 8px;
   padding: 14px;
+}
+
+.panel-section .metric-grid {
+  padding: 0;
 }
 
 .metric-grid article {
@@ -492,12 +537,9 @@ select {
   display: none;
 }
 
-.des-hidden-token-control {
-  display: none !important;
-}
-
 .des-task-stat-overlay,
-.des-frequency-overlay {
+.des-frequency-overlay,
+.des-task-error-overlay {
   pointer-events: none;
   color: #14342f;
   background: #ffffff;
@@ -507,6 +549,7 @@ select {
 }
 
 .des-task-stat-overlay {
+  position: relative;
   display: inline-flex;
   gap: 6px;
   max-width: 118px;
@@ -533,49 +576,76 @@ select {
   font-size: 11px;
 }
 
+.des-task-error-overlay {
+  display: grid;
+  min-width: 22px;
+  height: 22px;
+  place-items: center;
+  border: 1px solid #9c2f2b;
+  border-radius: 5px;
+  color: #ffffff;
+  background: #c63f39;
+}
+
+.des-task-error-overlay strong {
+  font-size: 11px;
+}
+
 .djs-element.des-active-path .djs-visual > :first-child,
 .djs-connection.des-active-path .djs-visual > :first-child {
   stroke: #16796b !important;
   stroke-width: 3px !important;
 }
 
-.djs-element.des-wait-low .djs-visual > :first-child {
+.djs-element.des-wait-low .djs-visual > :first-child,
+.djs-element.des-wait-low .djs-visual rect,
+.djs-element.des-wait-low .djs-visual path,
+.djs-element.des-wait-low .djs-visual polygon {
   fill: #edf8f2 !important;
   stroke: #2f8f67 !important;
 }
 
-.djs-element.des-wait-medium .djs-visual > :first-child {
+.djs-element.des-wait-medium .djs-visual > :first-child,
+.djs-element.des-wait-medium .djs-visual rect,
+.djs-element.des-wait-medium .djs-visual path,
+.djs-element.des-wait-medium .djs-visual polygon {
   fill: #fff3c4 !important;
   stroke: #b48916 !important;
   stroke-width: 3px !important;
 }
 
-.djs-element.des-wait-high .djs-visual > :first-child {
+.djs-element.des-wait-high .djs-visual > :first-child,
+.djs-element.des-wait-high .djs-visual rect,
+.djs-element.des-wait-high .djs-visual path,
+.djs-element.des-wait-high .djs-visual polygon {
   fill: #ffd9b5 !important;
   stroke: #c26a23 !important;
   stroke-width: 4px !important;
 }
 
-.djs-element.des-wait-critical .djs-visual > :first-child {
+.djs-element.des-wait-critical .djs-visual > :first-child,
+.djs-element.des-wait-critical .djs-visual rect,
+.djs-element.des-wait-critical .djs-visual path,
+.djs-element.des-wait-critical .djs-visual polygon {
   fill: #ffd0cc !important;
   stroke: #b4413c !important;
   stroke-width: 5px !important;
 }
 
-.djs-connection.des-flow-low .djs-visual > :first-child {
-  stroke-width: 2px !important;
+.djs-connection.des-flow-low .djs-visual > path {
+  stroke-width: 0.5pt !important;
 }
 
-.djs-connection.des-flow-medium .djs-visual > :first-child {
-  stroke-width: 4px !important;
+.djs-connection.des-flow-medium .djs-visual > path {
+  stroke-width: 1.33pt !important;
 }
 
-.djs-connection.des-flow-high .djs-visual > :first-child {
-  stroke-width: 6px !important;
+.djs-connection.des-flow-high .djs-visual > path {
+  stroke-width: 2.17pt !important;
 }
 
-.djs-connection.des-flow-critical .djs-visual > :first-child {
-  stroke-width: 8px !important;
+.djs-connection.des-flow-critical .djs-visual > path {
+  stroke-width: 3pt !important;
 }
 
 .djs-element.des-error-risk .djs-visual > :first-child {
@@ -598,7 +668,8 @@ select {
   stroke-width: 4px !important;
 }
 
-.des-node-tokens {
+.des-node-tokens,
+.des-flow-tokens {
   pointer-events: none;
 }
 
@@ -612,6 +683,18 @@ select {
 .des-node-token text {
   fill: #ffffff;
   font-size: 11px;
+  font-weight: 700;
+}
+
+.des-flow-token circle {
+  stroke: #ffffff;
+  stroke-width: 2;
+  filter: drop-shadow(0 2px 5px rgb(14 66 54 / 35%));
+}
+
+.des-flow-token text {
+  fill: #ffffff;
+  font-size: 10px;
   font-weight: 700;
 }
 
@@ -790,10 +873,11 @@ select {
 
 @media (max-width: 1100px) {
   .workspace {
-    grid-template-columns: 260px minmax(320px, 1fr);
+    grid-template-columns: var(--left-sidebar-width, 260px) 6px minmax(320px, 1fr);
   }
 
-  .properties-panel {
+  .properties-panel,
+  .right-sidebar-resizer {
     display: none;
   }
 }
@@ -809,12 +893,18 @@ select {
   }
 
   .run-controls {
+    flex: 0 1 auto;
     flex-wrap: wrap;
+    justify-content: flex-start;
   }
 
   .workspace {
     grid-template-columns: 1fr;
     grid-template-rows: 260px minmax(360px, 1fr);
+  }
+
+  .sidebar-resizer {
+    display: none;
   }
 
   .simulation-panel {

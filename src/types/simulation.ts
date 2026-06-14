@@ -143,6 +143,9 @@ export type ElementSimulationConfig = TaskSimulationConfig &
 export type SimulationConfig = {
   numberOfRuns: number;
   maxSimulationTime?: number;
+  startTime?: number;
+  startDateTime?: string;
+  endDateTime?: string;
   randomSeed: number;
   animationSpeed: number;
   collectTraces: boolean;
@@ -191,7 +194,9 @@ export type ElementMetrics = {
   retries: number;
   waitTime: number;
   waitTimeStddev: number;
+  waitTimeSamples?: number[];
   serviceTime: number;
+  serviceTimeSamples?: number[];
   unsupported: boolean;
 };
 
@@ -238,6 +243,7 @@ export type SimulationExports = {
 export type SimulationResult = {
   startedAt: Date;
   completedAt: Date;
+  currentTime?: number;
   options: SimulationConfig;
   processName: string;
   cases: CaseTrace[];

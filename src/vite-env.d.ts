@@ -12,7 +12,7 @@ declare module 'bpmn-js/lib/Modeler' {
   }
 }
 
-declare module 'bpmn-js-token-simulation';
+declare module 'bpmn-js-token-simulation/lib/features/toggle-mode/modeler';
 declare module 'bpmn-js/dist/assets/diagram-js.css';
 declare module 'bpmn-js/dist/assets/bpmn-js.css';
 declare module 'bpmn-js/dist/assets/bpmn-font/css/bpmn-embedded.css';

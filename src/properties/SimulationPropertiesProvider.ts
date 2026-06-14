@@ -819,37 +819,37 @@ function getDurationParameters(type: DurationDistributionType): Array<{
 }> {
   if (type === 'fixed') {
     return [
-      { key: 'mean', label: 'Dauer', defaultValue: 1, min: 0 }
+      { key: 'mean', label: 'Dauer (min)', defaultValue: 1, min: 0 }
     ];
   }
 
   if (type === 'uniform') {
     return [
-      { key: 'min', label: 'Min', defaultValue: 0, min: 0 },
-      { key: 'max', label: 'Max', defaultValue: 10, min: 0 }
+      { key: 'min', label: 'Min (min)', defaultValue: 0, min: 0 },
+      { key: 'max', label: 'Max (min)', defaultValue: 10, min: 0 }
     ];
   }
 
   if (type === 'normal') {
     return [
-      { key: 'mean', label: 'Mean', defaultValue: 1, min: 0 },
-      { key: 'stddev', label: 'Stddev', defaultValue: 1, min: 0 },
-      { key: 'min', label: 'Min', defaultValue: 0, min: 0 },
-      { key: 'max', label: 'Max', defaultValue: 10, min: 0 }
+      { key: 'mean', label: 'Mean (min)', defaultValue: 1, min: 0 },
+      { key: 'stddev', label: 'Stddev (min)', defaultValue: 1, min: 0 },
+      { key: 'min', label: 'Min (min)', defaultValue: 0, min: 0 },
+      { key: 'max', label: 'Max (min)', defaultValue: 10, min: 0 }
     ];
   }
 
   if (type === 'exponential') {
     return [
-      { key: 'mean', label: 'Mean', defaultValue: 1, min: 0 },
+      { key: 'mean', label: 'Mean (min)', defaultValue: 1, min: 0 },
       { key: 'lambda', label: 'Lambda', defaultValue: 1, min: 0 }
     ];
   }
 
   return [
-    { key: 'min', label: 'Min', defaultValue: 0, min: 0 },
-    { key: 'mode', label: 'Mode', defaultValue: 5, min: 0 },
-    { key: 'max', label: 'Max', defaultValue: 10, min: 0 }
+    { key: 'min', label: 'Min (min)', defaultValue: 0, min: 0 },
+    { key: 'mode', label: 'Mode (min)', defaultValue: 5, min: 0 },
+    { key: 'max', label: 'Max (min)', defaultValue: 10, min: 0 }
   ];
 }
 

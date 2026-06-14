@@ -150,7 +150,7 @@ export class DesEngine {
     const startNode = this.interpreter.getStartNode();
     const arrival = startNode.params.arrival;
     const numberOfCases = Math.max(1, Math.floor(this.options.numberOfRuns || arrival?.numberOfCases || 1));
-    let time = 0;
+    let time = this.options.startTime ?? 0;
 
     for (let caseId = 1; caseId <= numberOfCases; caseId += 1) {
       if (caseId > 1) {
@@ -242,7 +242,7 @@ export class DesEngine {
     }
 
     if (this.interpreter.isTimer(node)) {
-      this.queue.schedule('TIMER_FIRED', time + sampleDuration(node.params.duration, this.random), {
+      this.queue.schedule('TIMER_FIRED', time + minutesToHours(sampleDuration(node.params.duration, this.random)), {
         token,
         elementId: node.id
       });
@@ -323,7 +323,7 @@ export class DesEngine {
         ...payload.token,
         attempt: payload.token.attempt + 1
       };
-      const delay = sampleDuration(node.params.failure?.retryDelay, this.random);
+      const delay = minutesToHours(sampleDuration(node.params.failure?.retryDelay, this.random));
 
       this.tokens.incrementRetries(payload.token.caseId);
       this.statistics.recordRetry(node);
@@ -443,9 +443,9 @@ export class DesEngine {
     resourceId?: string
   ): void {
     const serviceTime = sampleDuration(node.params.duration, this.random);
-    const completionTime = addWorkingTime(time, serviceTime, node.params.resource);
+    const completionTime = addWorkingTime(time, minutesToHours(serviceTime), node.params.resource);
 
-    this.statistics.recordService(node, time - arrivedAt, serviceTime);
+    this.statistics.recordService(node, hoursToMinutes(time - arrivedAt), serviceTime);
     this.queue.schedule('TASK_COMPLETE', completionTime, {
       token,
       elementId: node.id,
@@ -541,8 +541,19 @@ function normalizeConfig(config: SimulationConfig): SimulationConfig {
   return {
     numberOfRuns: Math.max(1, Math.floor(config.numberOfRuns || 1)),
     maxSimulationTime: config.maxSimulationTime,
+    startTime: Math.max(0, config.startTime ?? 0),
+    startDateTime: config.startDateTime,
+    endDateTime: config.endDateTime,
     randomSeed: config.randomSeed || 1,
     animationSpeed: config.animationSpeed || 1,
     collectTraces: config.collectTraces
   };
+}
+
+function minutesToHours(minutes: number): number {
+  return Math.max(0, minutes) / 60;
+}
+
+function hoursToMinutes(hours: number): number {
+  return Math.max(0, hours) * 60;
 }
