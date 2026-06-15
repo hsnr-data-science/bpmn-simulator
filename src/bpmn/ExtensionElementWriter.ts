@@ -1,5 +1,5 @@
 import type { BpmnBusinessObject, BpmnElement, BpmnFactory, Modeling } from '../types/bpmn';
-import type { DurationConfig, OutputFieldConfig, SimulationResource } from '../types/simulation';
+import type { ArrivalConfig, DurationConfig, OutputFieldConfig, SimulationResource } from '../types/simulation';
 import {
   normalizeResourceSchedule,
   serializeHourRanges,
@@ -127,6 +127,39 @@ export function updateDurationConfig(
   for (const [attribute, value] of Object.entries(normalized)) {
     if (value !== undefined) {
       durationElement[attribute] = String(value);
+    }
+  }
+
+  modeling.updateModdleProperties(element, businessObject, {
+    extensionElements
+  });
+}
+
+export function updateArrivalConfig(
+  element: BpmnElement,
+  arrival: ArrivalConfig,
+  bpmnFactory: BpmnFactory,
+  modeling: Modeling
+): void {
+  const businessObject = element.businessObject;
+
+  if (!businessObject) {
+    return;
+  }
+
+  const extensionElements = ensureExtensionElements(businessObject, bpmnFactory);
+  const config = ensureConfig(extensionElements, 'startEvent', bpmnFactory);
+  const arrivalElement = ensureChild(config, 'arrival', bpmnFactory);
+
+  for (const attribute of ['type', 'interval', 'mean', 'stddev', 'min', 'max', 'lambda']) {
+    delete arrivalElement[attribute];
+  }
+
+  const normalized = normalizeArrival(arrival);
+
+  for (const [attribute, value] of Object.entries(normalized)) {
+    if (value !== undefined) {
+      arrivalElement[attribute] = String(value);
     }
   }
 
@@ -401,6 +434,48 @@ function normalizeDuration(duration: DurationConfig): DurationConfig {
     min: duration.min ?? 0,
     mode: duration.mode ?? 5,
     max: duration.max ?? 10
+  };
+}
+
+function normalizeArrival(arrival: ArrivalConfig): ArrivalConfig {
+  const type = ['none', 'fixed', 'normal', 'exponential'].includes(arrival.type ?? '')
+    ? arrival.type
+    : 'fixed';
+
+  if (type === 'none') {
+    return {
+      type
+    };
+  }
+
+  if (type === 'fixed') {
+    return {
+      type,
+      interval: arrival.interval ?? arrival.mean ?? 1
+    };
+  }
+
+  if (type === 'normal') {
+    return {
+      type,
+      mean: arrival.mean ?? arrival.interval ?? 1,
+      stddev: arrival.stddev ?? 1,
+      min: arrival.min,
+      max: arrival.max
+    };
+  }
+
+  if (type === 'exponential') {
+    return {
+      type,
+      mean: arrival.mean ?? arrival.interval ?? 1,
+      lambda: arrival.lambda
+    };
+  }
+
+  return {
+    type: 'fixed',
+    interval: arrival.interval ?? 1
   };
 }
 

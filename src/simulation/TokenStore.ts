@@ -1,7 +1,12 @@
-import type { CaseOutputValue, CaseTrace, OutputValue, Token } from '../types/simulation';
+import type { CaseOutputValue, CaseTrace, CaseTrigger, OutputValue, Token } from '../types/simulation';
 
 export type CaseState = {
   id: number;
+  processId?: string;
+  trigger?: CaseTrigger;
+  parentCaseId?: number;
+  triggerElementId?: string;
+  triggerEventKey?: string;
   startTime: number;
   endTime?: number;
   activeTokens: number;
@@ -17,15 +22,31 @@ export class TokenStore {
   private cases = new Map<number, CaseState>();
   private tokenSequence = 0;
 
-  createCase(id: number, startTime: number): CaseState {
+  createCase(
+    id: number,
+    startTime: number,
+    options: {
+      processId?: string;
+      trigger?: CaseTrigger;
+      parentCaseId?: number;
+      triggerElementId?: string;
+      triggerEventKey?: string;
+      outputs?: Record<string, CaseOutputValue>;
+    } = {}
+  ): CaseState {
     const state: CaseState = {
       id,
+      processId: options.processId,
+      trigger: options.trigger,
+      parentCaseId: options.parentCaseId,
+      triggerElementId: options.triggerElementId,
+      triggerEventKey: options.triggerEventKey,
       startTime,
       activeTokens: 0,
       failed: false,
       retries: 0,
       path: [],
-      outputs: {},
+      outputs: cloneOutputs(options.outputs),
       errors: [],
       joinCounts: new Map()
     };
@@ -37,12 +58,14 @@ export class TokenStore {
 
   createToken(caseId: number, elementId: string, attempt = 0): Token {
     this.tokenSequence += 1;
+    const state = this.getCase(caseId);
 
     return {
       id: `${caseId}:${this.tokenSequence}`,
       caseId,
       elementId,
-      attempt
+      attempt,
+      processId: state?.processId
     };
   }
 
@@ -113,6 +136,23 @@ export class TokenStore {
     this.setOutput(caseId, key, value);
   }
 
+  mergeOutputs(caseId: number, outputs: Record<string, CaseOutputValue> | undefined): void {
+    if (!outputs) {
+      return;
+    }
+
+    const state = this.getCase(caseId);
+
+    if (!state) {
+      return;
+    }
+
+    state.outputs = {
+      ...state.outputs,
+      ...cloneOutputs(outputs)
+    };
+  }
+
   getCase(caseId: number): CaseState | undefined {
     return this.cases.get(caseId);
   }
@@ -128,6 +168,11 @@ export class TokenStore {
 
       return {
         id: state.id,
+        processId: state.processId,
+        trigger: state.trigger,
+        parentCaseId: state.parentCaseId,
+        triggerElementId: state.triggerElementId,
+        triggerEventKey: state.triggerEventKey,
         startTime: state.startTime,
         endTime,
         cycleTime: Math.max(0, endTime - state.startTime),
@@ -146,4 +191,12 @@ export class TokenStore {
       state.endTime = time;
     }
   }
+}
+
+function cloneOutputs(
+  outputs: Record<string, CaseOutputValue> | undefined
+): Record<string, CaseOutputValue> {
+  return outputs
+    ? JSON.parse(JSON.stringify(outputs)) as Record<string, CaseOutputValue>
+    : {};
 }

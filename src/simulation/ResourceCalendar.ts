@@ -1,13 +1,13 @@
 import type { HourRange, ResourceConfig, SimulationResource, Weekday } from '../types/simulation';
 
 export const WEEKDAY_OPTIONS: Array<{ value: Weekday; label: string; longLabel: string }> = [
-  { value: 1, label: 'Mo', longLabel: 'Montag' },
-  { value: 2, label: 'Di', longLabel: 'Dienstag' },
-  { value: 3, label: 'Mi', longLabel: 'Mittwoch' },
-  { value: 4, label: 'Do', longLabel: 'Donnerstag' },
-  { value: 5, label: 'Fr', longLabel: 'Freitag' },
-  { value: 6, label: 'Sa', longLabel: 'Samstag' },
-  { value: 7, label: 'So', longLabel: 'Sonntag' }
+  { value: 1, label: 'Mon', longLabel: 'Monday' },
+  { value: 2, label: 'Tue', longLabel: 'Tuesday' },
+  { value: 3, label: 'Wed', longLabel: 'Wednesday' },
+  { value: 4, label: 'Thu', longLabel: 'Thursday' },
+  { value: 5, label: 'Fri', longLabel: 'Friday' },
+  { value: 6, label: 'Sat', longLabel: 'Saturday' },
+  { value: 7, label: 'Sun', longLabel: 'Sunday' }
 ];
 
 export const ALL_WEEKDAYS = WEEKDAY_OPTIONS.map((option) => option.value);
@@ -257,6 +257,48 @@ export function addWorkingTime(
   }
 
   return current;
+}
+
+export function workingTimeBetween(
+  startTime: number | undefined,
+  endTime: number | undefined,
+  resource: Pick<ResourceConfig, 'weekdays' | 'hourRanges'> | undefined
+): number {
+  if (
+    startTime === undefined ||
+    endTime === undefined ||
+    !Number.isFinite(startTime) ||
+    !Number.isFinite(endTime) ||
+    endTime <= startTime
+  ) {
+    return 0;
+  }
+
+  if (!resource || !hasCalendar(resource)) {
+    return endTime - startTime;
+  }
+
+  let current = nextResourceAvailability(resource, startTime);
+  let total = 0;
+
+  while (current < endTime) {
+    const rangeEnd = Math.min(currentAvailabilityEnd(resource, current), endTime);
+
+    if (rangeEnd > current) {
+      total += rangeEnd - current;
+      current = rangeEnd;
+    } else {
+      const next = nextResourceAvailability(resource, current);
+
+      if (next <= current) {
+        break;
+      }
+
+      current = next;
+    }
+  }
+
+  return total;
 }
 
 export function isResourceAvailable(

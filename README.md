@@ -112,7 +112,7 @@ Editierbar im Properties Panel sind:
 - User Tasks, Script Tasks, Receive Tasks und Service Tasks: einfache Output-Objekte als Key-Value-Liste.
 - Service Tasks: zusaetzlich Fehlerwahrscheinlichkeit und mögliche Fehlercodes; stochastische Outputs werden ueber Output-Objects modelliert.
 - Sequence Flows: JavaScript-Condition als BPMN `conditionExpression` im Documentation-Bereich und Branch-Wahrscheinlichkeit im DES-Bereich für XOR-Gateways ohne Bedingungen.
-- Start Events: Ankunftsverteilung, Intervall-/Mittelwert-/Schedule-Felder und Anzahl der Cases.
+- Start Events: Ankunftsverteilung `None`, `Fixed`, `Normal` oder `Exponential`, Anzahl der Cases und Ankunftskalender. Werte werden in Minuten eingegeben. `None` erzeugt keine Tokens und ist fuer Message-/Signal-Starts gedacht. Message-/Signal-Start-Events werden nicht automatisch aus Arrival-Konfigurationen gestartet, sondern nur durch passende Messages bzw. Signals. Neue Arrival-Kalender verwenden standardmaessig Montag bis Freitag, 8-17 Uhr.
 
 Globale Ressourcen werden in einem eigenen einklappbaren Ressourcenbereich der Anwendung gepflegt. Jede Ressource besitzt ID, Name, Kapazität und Verfügbarkeitskalender/Arbeitszeiten. Tasks speichern nur die Resource-ID als Referenz; Kapazität und Kalender werden beim Aufbau des Simulationsmodells aus dem globalen Katalog aufgelöst.
 
@@ -130,11 +130,13 @@ Der Simulator nutzt eine eigene diskrete Ereignissimulation mit Priority Queue, 
 
 ```text
 CASE_ARRIVAL
+EXTERNAL_EVENT_OCCURRED
 TOKEN_ENTER_ELEMENT
 TASK_START
 TASK_COMPLETE
 TIMER_FIRED
 MESSAGE_RECEIVED
+SIGNAL_RECEIVED
 TOKEN_LEAVE_ELEMENT
 PROCESS_INSTANCE_COMPLETE
 TASK_FAILED
@@ -155,16 +157,21 @@ MVP-Unterstützung:
 - Sequence Flow
 - einfache Subprozesse als Container mit Start-/End-Logik
 - Timer Intermediate Events als Verzögerung
+- Collaborations mit mehreren BPMN-Prozessen/Pools
+- Message Start Events, Message Intermediate Catch/Throw Events und Message End Events
+- Signal Start Events, Signal Intermediate Catch/Throw Events und Signal End Events
 
 Vorbereitet, aber noch nicht vollständig implementiert:
 
 - Boundary Events
 - Event Subprocesses
-- Message Events
+- Message/Signal Boundary Events
 - Inclusive Gateways
 - Multi-Instance Activities
 
 Nicht unterstützte Elemente brechen die Simulation nicht ab. Sie erzeugen eine Warnung im Log Panel und werden im Diagramm markiert.
+
+Message-Flows in einer Collaboration werden als gezielte Zustellung zwischen Prozessinstanzen interpretiert. Message Start Events erzeugen neue Prozessinstanzen nur durch passende Messages, Message Catch Events warten auf passende Messages; noch nicht konsumierte Messages werden für spätere Catch Events gepuffert. Child-Prozesse erhalten die `parentCaseId` als Prozessvariable. Signals werden als Broadcast behandelt und starten alle passenden Signal Start Events bzw. wecken passende wartende Signal Catch Events. Zufällige externe Ereignisse werden über nicht korrelierte Start Events mit Arrival-Konfiguration modelliert, nicht über Message-/Signal-Start-Events.
 
 ## XOR-Logik
 

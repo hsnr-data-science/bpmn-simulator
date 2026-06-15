@@ -50,6 +50,79 @@ test('DES uses resource calendars for task start and working-time completion', (
   assert.equal(taskMetrics?.serviceTime, 180);
 });
 
+test('DES constrains start event arrivals to the configured arrival calendar', () => {
+  const model = createLinearModel();
+  const start = model.nodes.get('start');
+
+  if (!start) {
+    throw new Error('start missing');
+  }
+
+  start.params.arrival = {
+    type: 'fixed',
+    interval: 60,
+    weekdays: [1],
+    hourRanges: [{ start: 8, end: 10 }]
+  };
+
+  const result = new DesEngine(model, {
+    numberOfRuns: 2,
+    randomSeed: 1,
+    animationSpeed: 1,
+    collectTraces: true
+  }).run();
+
+  assert.deepEqual(result.cases.map((caseTrace) => caseTrace.startTime), [8, 9]);
+});
+
+test('DES skips start events with arrival distribution none', () => {
+  const model = createLinearModel();
+  const start = model.nodes.get('start');
+
+  if (!start) {
+    throw new Error('start missing');
+  }
+
+  start.params.arrival = {
+    type: 'none'
+  };
+
+  const result = new DesEngine(model, {
+    numberOfRuns: 5,
+    randomSeed: 1,
+    animationSpeed: 1,
+    collectTraces: true
+  }).run();
+
+  assert.equal(result.cases.length, 0);
+  assert.equal(result.completedCases, 0);
+});
+
+test('DES uses start event numberOfCases before the global run count', () => {
+  const model = createLinearModel();
+  const start = model.nodes.get('start');
+
+  if (!start) {
+    throw new Error('start missing');
+  }
+
+  start.params.arrival = {
+    type: 'fixed',
+    interval: 60,
+    numberOfCases: 2
+  };
+
+  const result = new DesEngine(model, {
+    numberOfRuns: 5,
+    randomSeed: 1,
+    animationSpeed: 1,
+    collectTraces: true
+  }).run();
+
+  assert.equal(result.cases.length, 2);
+  assert.deepEqual(result.cases.map((caseTrace) => caseTrace.startTime), [8, 9]);
+});
+
 test('DES reports standard deviation for task waiting times', () => {
   const model = createLinearModel();
   const start = model.nodes.get('start');
@@ -60,7 +133,7 @@ test('DES reports standard deviation for task waiting times', () => {
   }
 
   start.params.arrival = {
-    type: 'fixedInterval',
+    type: 'fixed',
     interval: 0
   };
   task.params.resource = {
@@ -76,8 +149,8 @@ test('DES reports standard deviation for task waiting times', () => {
   }).run();
   const taskMetrics = result.elementMetrics.find((metric) => metric.elementId === 'task');
 
-  assert.equal(taskMetrics?.waitTime, 5);
-  assert.equal(taskMetrics?.waitTimeStddev, 2.5);
+  assert.ok(Math.abs((taskMetrics?.waitTime ?? 0) - 5) < 1e-9);
+  assert.ok(Math.abs((taskMetrics?.waitTimeStddev ?? 0) - 2.5) < 1e-9);
 });
 
 test('DES samples output objects for completed tasks', () => {
@@ -121,6 +194,47 @@ test('DES samples output objects for completed tasks', () => {
   });
 });
 
+test('DES does not count retry attempts as additional task visits', () => {
+  const model = createLinearModel();
+  const task = model.nodes.get('task');
+
+  if (!task) {
+    throw new Error('task missing');
+  }
+
+  task.kind = 'serviceTask';
+  task.params.resource = {
+    resourceId: 'retry_worker',
+    capacity: 1
+  };
+  task.params.error = {
+    probability: 1
+  };
+  task.params.failure = {
+    retryCount: 1,
+    retryDelay: {
+      type: 'fixed',
+      mean: 0
+    }
+  };
+
+  const result = new DesEngine(model, {
+    numberOfRuns: 1,
+    randomSeed: 1,
+    animationSpeed: 1,
+    collectTraces: true
+  }).run();
+  const taskMetrics = result.elementMetrics.find((metric) => metric.elementId === 'task');
+  const resource = result.resourceMetrics.find((metric) => metric.resourceId === 'retry_worker');
+
+  assert.equal(result.failedCases, 1);
+  assert.equal(taskMetrics?.visits, 1);
+  assert.equal(taskMetrics?.retries, 1);
+  assert.equal(taskMetrics?.serviceTimeSamples?.length, 2);
+  assert.equal(resource?.taskCount, 1);
+  assert.equal(resource?.serviceTimeSamples?.length, 2);
+});
+
 test('DES exports event log CSV and simulation result CSV with resource metrics', () => {
   const model = createLinearModel();
   const task = model.nodes.get('task');
@@ -158,11 +272,13 @@ test('DES exports event log CSV and simulation result CSV with resource metrics'
   assert.equal(resource?.taskCount, 1);
   assert.equal(resource?.errors, 0);
   assert.equal(resource?.serviceTime, 5);
+  assert.ok(Math.abs((resource?.utilization ?? 0) - 1) < 1e-9);
   assert.match(result.exports.eventLogCsv, /CaseID,TaskID \/ EventID,TaskName \/ Event Name,Startzeit,Endzeit,Resource,Variables/);
   assert.match(result.exports.eventLogCsv, /1,task,Task,2026-06-15 08:00:00,2026-06-15 08:05:00,worker/);
   assert.match(result.exports.eventLogCsv, /status/);
   assert.match(result.exports.simulationResultsCsv, /Task,task,Task,1,0,5,5,5,5,0,0,0,0/);
-  assert.match(result.exports.simulationResultsCsv, /Resource,worker,worker,1,0,5,5,5,5,0,0,0,0/);
+  assert.match(result.exports.simulationResultsCsv, /Auslastung/);
+  assert.match(result.exports.simulationResultsCsv, /Resource,worker,worker,1,0,5,5,5,5,0,0,0,0,1/);
 });
 
 test('DES routes XOR conditions with variables from previous output objects', () => {

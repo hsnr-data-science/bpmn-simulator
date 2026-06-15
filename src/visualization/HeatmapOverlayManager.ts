@@ -114,8 +114,8 @@ export class HeatmapOverlayManager {
     const waitStddev = metric.waitTimeStddev;
     const html = [
       '<div class="des-task-stat-overlay">',
-      `<span title="Mittlere Wartezeit in Minuten">W ${formatNumber(avgWait)}m</span>`,
-      `<span title="Standardabweichung Wartezeit in Minuten">Std ${formatNumber(waitStddev)}m</span>`,
+      `<span title="Average wait time">W ${formatDurationMinutes(avgWait)}</span>`,
+      `<span title="Wait time standard deviation">Std ${formatDurationMinutes(waitStddev)}</span>`,
       '</div>'
     ].join('');
 
@@ -138,7 +138,7 @@ export class HeatmapOverlayManager {
     const heat = Math.round(30 + intensity * 70);
     const html = [
       `<div class="des-frequency-overlay" style="--heat:${heat}%">`,
-      `<strong title="Ausfuehrungshaeufigkeit">${visits}</strong>`,
+      `<strong title="Execution frequency">${visits}</strong>`,
       '</div>'
     ].join('');
 
@@ -160,7 +160,7 @@ export class HeatmapOverlayManager {
   private addTaskErrorOverlay(elementId: string, errors: number): void {
     const html = [
       '<div class="des-task-error-overlay">',
-      `<strong title="Fehleranzahl">${errors}</strong>`,
+      `<strong title="Error count">${errors}</strong>`,
       '</div>'
     ].join('');
 
@@ -279,6 +279,35 @@ function formatNumber(value: number): string {
   }
 
   return value.toFixed(2);
+}
+
+function formatDurationMinutes(minutes: number): string {
+  if (!Number.isFinite(minutes)) {
+    return '-';
+  }
+
+  const sign = minutes < 0 ? '-' : '';
+  const absolute = Math.abs(minutes);
+
+  if (absolute === 0) {
+    return '0m';
+  }
+
+  if (absolute < 10 && !Number.isInteger(absolute)) {
+    return `${sign}${formatNumber(absolute)}m`;
+  }
+
+  const totalMinutes = Math.round(absolute);
+  const days = Math.floor(totalMinutes / 1440);
+  const hours = Math.floor((totalMinutes % 1440) / 60);
+  const remainingMinutes = totalMinutes % 60;
+  const parts = [
+    days ? `${days}d` : undefined,
+    hours ? `${hours}h` : undefined,
+    remainingMinutes || (!days && !hours) ? `${remainingMinutes}m` : undefined
+  ].filter(Boolean);
+
+  return `${sign}${parts.join(' ')}`;
 }
 
 function average(values: number[]): number {

@@ -1,4 +1,4 @@
-import type { SimFlow, SimModel, SimNode } from '../types/bpmn';
+import type { SimEventDefinition, SimFlow, SimModel, SimNode } from '../types/bpmn';
 import type { CaseOutputValue, SimulationLogEntry } from '../types/simulation';
 import { isTaskKind } from '../bpmn/BpmnElementClassifier';
 import { SeededRandom } from './RandomDistributions';
@@ -30,6 +30,12 @@ export class BpmnSimulationInterpreter {
     return startNode;
   }
 
+  getRootStartNodes(): SimNode[] {
+    return this.model.startNodeIds
+      .map((startNodeId) => this.model.nodes.get(startNodeId))
+      .filter(Boolean) as SimNode[];
+  }
+
   isTask(node: SimNode): boolean {
     return isTaskKind(node.kind);
   }
@@ -40,6 +46,32 @@ export class BpmnSimulationInterpreter {
 
   isTimer(node: SimNode): boolean {
     return node.kind === 'timerIntermediateEvent';
+  }
+
+  isEventTriggeredStart(node: SimNode): boolean {
+    return node.kind === 'startEvent' && this.hasEventDefinition(node, 'message', 'signal', 'timer');
+  }
+
+  isCatchingMessageOrSignalEvent(node: SimNode): boolean {
+    return node.eventDirection === 'catch' &&
+      node.kind !== 'startEvent' &&
+      this.hasEventDefinition(node, 'message', 'signal');
+  }
+
+  isThrowingMessageOrSignalEvent(node: SimNode): boolean {
+    return node.eventDirection === 'throw' && this.hasEventDefinition(node, 'message', 'signal');
+  }
+
+  getEventDefinitions(node: SimNode, ...types: SimEventDefinition['type'][]): SimEventDefinition[] {
+    if (!types.length) {
+      return node.eventDefinitions ?? [];
+    }
+
+    return (node.eventDefinitions ?? []).filter((definition) => types.includes(definition.type));
+  }
+
+  getEventKey(definition: SimEventDefinition): string {
+    return definition.name ?? definition.refId ?? definition.id ?? definition.type;
   }
 
   isRootEndEvent(node: SimNode): boolean {
@@ -87,6 +119,10 @@ export class BpmnSimulationInterpreter {
 
   getNode(nodeId: string): SimNode | undefined {
     return this.model.nodes.get(nodeId);
+  }
+
+  private hasEventDefinition(node: SimNode, ...types: SimEventDefinition['type'][]): boolean {
+    return this.getEventDefinitions(node, ...types).length > 0;
   }
 
   private selectExclusiveGatewayFlow(

@@ -1,8 +1,9 @@
 import BpmnModeler from 'bpmn-js/lib/Modeler';
 import { BpmnPropertiesPanelModule, BpmnPropertiesProviderModule } from 'bpmn-js-properties-panel';
-import { createIcons, Download, FileJson, FilePlus, Play, Plus, RotateCcw, Square, Trash2, Upload } from 'lucide';
+import { createIcons, Download, File, FilePlus, Play, Plus, RotateCcw, Square, Trash2, Upload } from 'lucide';
 import { buildBpmnGraph } from '../bpmn/BpmnGraphBuilder';
 import { defaultDiagram } from '../bpmn/defaultDiagram';
+import { emptyDiagram } from '../bpmn/emptyDiagram';
 import { readResourceCatalog } from '../bpmn/ExtensionElementReader';
 import { updateResourceCatalog } from '../bpmn/ExtensionElementWriter';
 import simulationModdle from '../bpmn/simulationModdle.json';
@@ -36,6 +37,7 @@ type Overlays = ConstructorParameters<typeof HeatmapOverlayManager>[0];
 
 type EventBus = {
   on(event: string, callback: (event: { active?: boolean; newSelection?: BpmnElement[] }) => void): void;
+  fire(event: string, payload?: Record<string, unknown>): void;
 };
 
 type ElementRegistry = {
@@ -52,9 +54,9 @@ type ModelerWithDefinitions = BpmnModeler & {
 
 type AppElements = {
   newDiagram: HTMLButtonElement;
+  emptyDiagram: HTMLButtonElement;
   importDiagram: HTMLButtonElement;
   exportDiagram: HTMLButtonElement;
-  exportResults: HTMLButtonElement;
   runSimulation: HTMLButtonElement;
   stopSimulation: HTMLButtonElement;
   resetSimulation: HTMLButtonElement;
@@ -139,8 +141,8 @@ export class ModelerApp {
     );
 
     this.elements = this.collectElements();
-    this.eventLogPanel = new SimulationLogPanel(this.elements.eventLogList);
-    this.warningPanel = new SimulationLogPanel(this.elements.warningList);
+    this.eventLogPanel = new SimulationLogPanel(this.elements.eventLogList, 'No events');
+    this.warningPanel = new SimulationLogPanel(this.elements.warningList, 'No warnings');
     this.initializeSimulationTimes();
     this.bindEvents();
     this.bindTokenSimulationMode();
@@ -151,12 +153,16 @@ export class ModelerApp {
   }
 
   async start(): Promise<void> {
-    await this.importDiagram(defaultDiagram);
+    await this.importDiagram(defaultDiagram, 'Demo model loaded');
   }
 
   private bindEvents(): void {
     this.elements.newDiagram.addEventListener('click', () => {
-      void this.importDiagram(defaultDiagram);
+      void this.importDiagram(defaultDiagram, 'Demo model loaded');
+    });
+
+    this.elements.emptyDiagram.addEventListener('click', () => {
+      void this.importDiagram(emptyDiagram, 'Empty model created');
     });
 
     this.elements.importDiagram.addEventListener('click', () => {
@@ -170,18 +176,23 @@ export class ModelerApp {
         return;
       }
 
-      await this.importDiagram(await file.text());
-      this.elements.fileInput.value = '';
+      try {
+        await this.importDiagram(await file.text(), `Model "${file.name}" loaded`);
+      } catch (error) {
+        this.showApplicationError(`File "${file.name}" could not be read`, error);
+      } finally {
+        this.elements.fileInput.value = '';
+      }
     });
 
     this.elements.exportDiagram.addEventListener('click', async () => {
-      const { xml } = await this.modeler.saveXML({ format: true });
+      try {
+        const { xml } = await this.modeler.saveXML({ format: true });
 
-      download('diagram.bpmn', xml, 'application/bpmn20-xml;charset=utf-8');
-    });
-
-    this.elements.exportResults.addEventListener('click', () => {
-      this.exportResult('json');
+        download('diagram.bpmn', xml, 'application/bpmn20-xml;charset=utf-8');
+      } catch (error) {
+        this.showApplicationError('BPMN export failed', error);
+      }
     });
 
     this.elements.exportJson.addEventListener('click', () => {
@@ -203,19 +214,14 @@ export class ModelerApp {
     this.elements.stopSimulation.addEventListener('click', () => {
       this.simulationRunId += 1;
       this.tokenAnimator.stop();
-      this.setStatus('Simulation gestoppt');
+      this.setStatus('Simulation stopped');
     });
 
     this.elements.resetSimulation.addEventListener('click', () => {
       this.simulationRunId += 1;
-      this.tokenAnimator.stop();
-      this.heatmapOverlays.clear();
-      this.lastResult = undefined;
-      this.displayedResult = undefined;
-      this.setExportButtons(false);
-      this.renderEmptyResults();
+      this.clearSimulationState();
       this.updateCurrentSimulationTime();
-      this.setStatus('Simulation zurueckgesetzt');
+      this.setStatus('Simulation reset');
     });
 
     this.elements.animationSpeed.addEventListener('input', () => {
@@ -234,7 +240,11 @@ export class ModelerApp {
     });
 
     this.elements.addResource.addEventListener('click', () => {
-      this.addResource();
+      try {
+        this.addResource();
+      } catch (error) {
+        this.showApplicationError('Resource could not be added', error);
+      }
     });
 
     this.elements.resourceList.addEventListener('input', (event) => {
@@ -242,8 +252,12 @@ export class ModelerApp {
         return;
       }
 
-      this.persistResources(this.readResourcesFromEditor());
-      this.setStatus('Ressourcen gespeichert');
+      try {
+        this.persistResources(this.readResourcesFromEditor());
+        this.setStatus('Resources saved');
+      } catch (error) {
+        this.showApplicationError('Resources could not be saved', error);
+      }
     });
 
     this.elements.resourceList.addEventListener('change', (event) => {
@@ -253,8 +267,12 @@ export class ModelerApp {
         ensureAtLeastOneSelection(target);
       }
 
-      this.persistResources(this.readResourcesFromEditor());
-      this.setStatus('Ressourcen gespeichert');
+      try {
+        this.persistResources(this.readResourcesFromEditor());
+        this.setStatus('Resources saved');
+      } catch (error) {
+        this.showApplicationError('Resources could not be saved', error);
+      }
     });
 
     this.elements.resourceList.addEventListener('click', (event) => {
@@ -271,10 +289,14 @@ export class ModelerApp {
         return;
       }
 
-      resources.splice(index, 1);
-      this.persistResources(resources);
-      this.renderResources(resources);
-      this.setStatus('Ressource entfernt');
+      try {
+        resources.splice(index, 1);
+        this.persistResources(resources);
+        this.renderResources(resources);
+        this.setStatus('Resource removed');
+      } catch (error) {
+        this.showApplicationError('Resource could not be removed', error);
+      }
     });
   }
 
@@ -283,36 +305,41 @@ export class ModelerApp {
       return;
     }
 
-    if (kind === 'resultsCsv') {
-      download('des-simulation-results.csv', this.lastResult.exports.simulationResultsCsv, 'text/csv;charset=utf-8');
-      return;
-    }
+    try {
+      if (kind === 'resultsCsv') {
+        download('des-simulation-results.csv', this.lastResult.exports.simulationResultsCsv, 'text/csv;charset=utf-8');
+        return;
+      }
 
-    if (kind === 'eventLogCsv') {
-      download('des-simulation-event-log.csv', this.lastResult.exports.eventLogCsv, 'text/csv;charset=utf-8');
-      return;
-    }
+      if (kind === 'eventLogCsv') {
+        download('des-simulation-event-log.csv', this.lastResult.exports.eventLogCsv, 'text/csv;charset=utf-8');
+        return;
+      }
 
-    download('des-simulation-results.json', this.lastResult.exports.json, 'application/json;charset=utf-8');
+      download('des-simulation-results.json', this.lastResult.exports.json, 'application/json;charset=utf-8');
+    } catch (error) {
+      this.showApplicationError('Result export failed', error);
+    }
   }
 
-  private async importDiagram(xml: string): Promise<void> {
+  private async importDiagram(xml: string, successMessage = 'Diagram loaded'): Promise<void> {
+    this.simulationRunId += 1;
+    this.clearSimulationState();
+    this.elements.resourceList.replaceChildren();
+    this.dispatchResourceCatalogChanged();
+
     try {
       await this.modeler.importXML(xml);
       this.canvas.zoom('fit-viewport');
-      this.simulationRunId += 1;
-      this.tokenAnimator.stop();
-      this.heatmapOverlays.clear();
-      this.lastResult = undefined;
-      this.displayedResult = undefined;
       this.selectedTaskId = undefined;
-      this.setExportButtons(false);
-      this.renderEmptyResults();
       this.renderResources();
       this.updateCurrentSimulationTime();
-      this.setStatus('Diagramm geladen');
+      this.dispatchResourceCatalogChanged();
+      this.setStatus(successMessage);
     } catch (error) {
-      this.setStatus(error instanceof Error ? error.message : 'Import fehlgeschlagen');
+      this.elements.resourceList.replaceChildren();
+      this.dispatchResourceCatalogChanged();
+      this.showApplicationError('BPMN import failed', error);
     }
   }
 
@@ -350,14 +377,31 @@ export class ModelerApp {
       this.setExportButtons(true);
 
       if (this.isTokenSimulationActive()) {
+        let lastResultRender = 0;
+        let lastOverlayRender = 0;
+        let lastStatusRender = 0;
+
         this.renderEmptyResults();
-        this.setStatus(`Token-Visualisierung laeuft mit ${animationSpeed}x`);
+        this.setStatus(`Token visualization running at ${animationSpeed}x`);
         await this.tokenAnimator.play(result, animationSpeed, (progressResult) => {
-          this.renderResults(progressResult);
-          this.heatmapOverlays.render(progressResult);
-          this.setStatus(
-            `Token-Visualisierung t=${formatNumber(currentSimulationTime(progressResult))}, ${progressResult.completedCases}/${result.cases.length} Cases`
-          );
+          const now = performance.now();
+
+          if (now - lastResultRender >= LIVE_RESULT_RENDER_INTERVAL_MS) {
+            this.renderResults(progressResult);
+            lastResultRender = now;
+          }
+
+          if (now - lastOverlayRender >= LIVE_OVERLAY_RENDER_INTERVAL_MS) {
+            this.heatmapOverlays.render(progressResult);
+            lastOverlayRender = now;
+          }
+
+          if (now - lastStatusRender >= LIVE_STATUS_RENDER_INTERVAL_MS) {
+            this.setStatus(
+              `Token visualization t=${formatDurationHours(currentSimulationTime(progressResult))}, ${progressResult.completedCases}/${result.cases.length} cases`
+            );
+            lastStatusRender = now;
+          }
         });
 
         if (runId !== this.simulationRunId) {
@@ -366,17 +410,27 @@ export class ModelerApp {
 
         this.renderResults(result);
         this.heatmapOverlays.render(result);
-        this.setStatus(`${result.completedCases} Cases abgeschlossen und visualisiert`);
+        this.setStatus(`${result.completedCases} cases completed and visualized`);
         return;
       }
 
       this.renderResults(result);
       this.heatmapOverlays.render(result);
-      this.setStatus(`${result.completedCases} Cases abgeschlossen`);
+      this.setStatus(`${result.completedCases} cases completed`);
     } catch (error) {
-      this.tokenAnimator.stop();
-      this.setStatus(error instanceof Error ? error.message : 'Simulation fehlgeschlagen');
+      this.clearSimulationState();
+      this.showApplicationError('Simulation failed', error);
     }
+  }
+
+  private clearSimulationState(): void {
+    this.tokenAnimator.stop();
+    this.heatmapOverlays.clear();
+    this.lastResult = undefined;
+    this.displayedResult = undefined;
+    this.selectedTaskId = undefined;
+    this.setExportButtons(false);
+    this.renderEmptyResults();
   }
 
   private renderEmptyResults(): void {
@@ -391,6 +445,7 @@ export class ModelerApp {
     this.elements.resourceStatsTable.replaceChildren();
     this.eventLogPanel.render([]);
     this.warningPanel.render([]);
+    this.elements.logList.replaceChildren();
   }
 
   private addResource(): void {
@@ -407,7 +462,7 @@ export class ModelerApp {
 
     this.persistResources(resources);
     this.renderResources(resources);
-    this.setStatus('Ressource hinzugefuegt');
+    this.setStatus('Resource added');
   }
 
   private renderResources(resources = this.readResourcesFromModel()): void {
@@ -438,7 +493,7 @@ export class ModelerApp {
     const process = this.getProcess();
 
     if (!process) {
-      return;
+      throw new Error('No bpmn:Process found in the current model. Resources cannot be saved.');
     }
 
     updateResourceCatalog(
@@ -448,6 +503,7 @@ export class ModelerApp {
       this.modeler.get<BpmnFactory>('bpmnFactory'),
       this.modeler.get<Modeling>('modeling')
     );
+    this.dispatchResourceCatalogChanged();
   }
 
   private getProcess(): BpmnBusinessObject | undefined {
@@ -460,8 +516,8 @@ export class ModelerApp {
     this.displayedResult = result;
     this.elements.metricCompleted.textContent = `${result.completedCases}`;
     this.elements.metricFailed.textContent = `${result.failedCases}`;
-    this.elements.metricAvgCycle.textContent = formatNumber(result.cycleTimeAverage);
-    this.elements.metricP90Cycle.textContent = formatNumber(result.cycleTimeP90);
+    this.elements.metricAvgCycle.textContent = formatDurationHours(result.cycleTimeAverage);
+    this.elements.metricP90Cycle.textContent = formatDurationHours(result.cycleTimeP90);
 
     this.renderBottlenecks(result.elementMetrics);
     this.renderPaths(result);
@@ -488,8 +544,8 @@ export class ModelerApp {
         const item = document.createElement('li');
         item.innerHTML = `
           <span>${escapeHtml(metric.name)}</span>
-          <strong>${formatNumber(metric.avgWait + metric.avgService)} min</strong>
-          <small>Wait+Service avg: W ${formatNumber(metric.avgWait)} min, S ${formatNumber(metric.avgService)} min · ${metric.visits} visits, ${metric.errors} errors</small>
+          <strong>${formatDurationMinutes(metric.avgWait + metric.avgService)}</strong>
+          <small>Wait+Service avg: W ${formatDurationMinutes(metric.avgWait)}, S ${formatDurationMinutes(metric.avgService)} · ${metric.visits} visits, ${metric.errors} errors</small>
         `;
         return item;
       })
@@ -518,13 +574,13 @@ export class ModelerApp {
         const row = document.createElement('tr');
         const nameCell = document.createElement('td');
         const valueCell = document.createElement('td');
-        const service = describeSamples(metric.serviceTimeSamples ?? []);
-        const wait = describeSamples(metric.waitTimeSamples ?? []);
+        const service = describeSamples(metric.serviceTimeSamples ?? [], formatDurationMinutes);
+        const wait = describeSamples(metric.waitTimeSamples ?? [], formatDurationMinutes);
 
         nameCell.textContent = metric.name || metric.resourceId;
         valueCell.innerHTML = `
-          <strong>${metric.taskCount} tasks, ${metric.errors} errors</strong>
-          <small>Service ${formatSampleDescription(service)} min<br>Wait ${formatSampleDescription(wait)} min</small>
+          <strong>${metric.taskCount} tasks, ${metric.errors} errors · Utilization ${formatPercent(metric.utilization ?? 0)}</strong>
+          <small>Service ${formatSampleDescription(service)}<br>Wait ${formatSampleDescription(wait)}</small>
         `;
         row.append(nameCell, valueCell);
 
@@ -561,17 +617,17 @@ export class ModelerApp {
     metric: ElementMetrics | undefined
   ): Array<[string, string | number]> {
     const taskName = metric?.name ?? this.getElementLabel(this.selectedTaskId) ?? this.selectedTaskId ?? 'Task';
-    const service = describeSamples(metric?.serviceTimeSamples ?? []);
-    const wait = describeSamples(metric?.waitTimeSamples ?? []);
+    const service = describeSamples(metric?.serviceTimeSamples ?? [], formatDurationMinutes);
+    const wait = describeSamples(metric?.waitTimeSamples ?? [], formatDurationMinutes);
     const outputVariables = this.selectedTaskId ? collectOutputVariables(result, this.selectedTaskId) : [];
 
     return [
       ['Scope', `Task: ${taskName}`],
-      ['Anzahl Ausfuehrungen', metric?.visits ?? 0],
-      ['Bearbeitungszeiten (min)', formatSampleDescription(service)],
-      ['Wartezeiten (min)', formatSampleDescription(wait)],
-      ['Anzahl Fehler', metric?.errors ?? 0],
-      ['Output-Variablen', outputVariables.length ? outputVariables.join(', ') : '-']
+      ['Executions', metric?.visits ?? 0],
+      ['Service times', formatSampleDescription(service)],
+      ['Wait times', formatSampleDescription(wait)],
+      ['Errors', metric?.errors ?? 0],
+      ['Output variables', outputVariables.length ? outputVariables.join(', ') : '-']
     ];
   }
 
@@ -706,9 +762,9 @@ export class ModelerApp {
   private collectElements(): AppElements {
     return {
       newDiagram: getElement('new-diagram'),
+      emptyDiagram: getElement('empty-diagram'),
       importDiagram: getElement('import-diagram'),
       exportDiagram: getElement('export-diagram'),
-      exportResults: getElement('export-results'),
       runSimulation: getElement('run-simulation'),
       stopSimulation: getElement('stop-simulation'),
       resetSimulation: getElement('reset-simulation'),
@@ -748,10 +804,36 @@ export class ModelerApp {
   }
 
   private setExportButtons(enabled: boolean): void {
-    this.elements.exportResults.disabled = !enabled;
     this.elements.exportJson.disabled = !enabled;
     this.elements.exportResultsCsv.disabled = !enabled;
     this.elements.exportEventLogCsv.disabled = !enabled;
+  }
+
+  private showApplicationError(context: string, error: unknown): void {
+    const detail = formatErrorDetail(error);
+
+    console.error(context, error);
+    this.setStatus(`${context}: ${detail.summary}`);
+    this.warningPanel.render([
+      {
+        level: 'error',
+        message: `${context}: ${detail.message}`
+      }
+    ]);
+  }
+
+  private dispatchResourceCatalogChanged(): void {
+    const eventBus = this.modeler.get<EventBus>('eventBus');
+
+    eventBus.fire('propertiesPanel.providersChanged');
+
+    try {
+      eventBus.fire('elements.changed', {
+        elements: [this.canvas.getRootElement()]
+      });
+    } catch {
+      // No root is available during the very first import.
+    }
   }
 
   private bindTokenSimulationMode(): void {
@@ -778,24 +860,27 @@ export class ModelerApp {
   }
 }
 
-const ANIMATION_SPEEDS = [1, 10, 100, 1000, 10000] as const;
+const ANIMATION_SPEEDS = [1, 2, 4, 8, 16] as const;
+const LIVE_RESULT_RENDER_INTERVAL_MS = 450;
+const LIVE_OVERLAY_RENDER_INTERVAL_MS = 700;
+const LIVE_STATUS_RENDER_INTERVAL_MS = 250;
 
 function createShellMarkup(): string {
   return `
     <main class="app-shell">
       <header class="toolbar">
         <div class="toolbar-group">
-          <button id="new-diagram" class="icon-button" title="Demo-Modell laden" aria-label="Demo-Modell laden">
+          <button id="empty-diagram" class="icon-button" title="Create empty model" aria-label="Create empty model">
+            <i data-lucide="file"></i>
+          </button>
+          <button id="new-diagram" class="icon-button" title="Load demo model" aria-label="Load demo model">
             <i data-lucide="file-plus"></i>
           </button>
-          <button id="import-diagram" class="icon-button" title="BPMN importieren" aria-label="BPMN importieren">
+          <button id="import-diagram" class="icon-button" title="Import BPMN" aria-label="Import BPMN">
             <i data-lucide="upload"></i>
           </button>
-          <button id="export-diagram" class="icon-button" title="BPMN exportieren" aria-label="BPMN exportieren">
+          <button id="export-diagram" class="icon-button" title="Export BPMN" aria-label="Export BPMN">
             <i data-lucide="download"></i>
-          </button>
-          <button id="export-results" class="icon-button" title="Ergebnisse exportieren" aria-label="Ergebnisse exportieren" disabled>
-            <i data-lucide="file-json"></i>
           </button>
         </div>
         <div class="toolbar-group run-controls">
@@ -808,15 +893,15 @@ function createShellMarkup(): string {
             <input id="seed" type="number" min="1" step="1" value="42" />
           </label>
           <label class="datetime-control">
-            <span>Startzeit</span>
+            <span>Start Time</span>
             <input id="simulation-start-time" class="datetime-input" type="datetime-local" />
           </label>
           <label class="datetime-control">
-            <span>Ende</span>
+            <span>End Time</span>
             <input id="simulation-end-time" class="datetime-input" type="datetime-local" />
           </label>
           <label class="datetime-control current-time-control">
-            <span>Sim-Zeit</span>
+            <span>Sim Time</span>
             <input id="simulation-current-time" class="datetime-input current-time-input" type="text" readonly />
           </label>
           <button id="run-simulation" class="primary-button">
@@ -835,11 +920,11 @@ function createShellMarkup(): string {
             <strong id="animation-speed-value">1x</strong>
           </label>
           <datalist id="animation-speed-marks">
-            <option value="0" label="1"></option>
-            <option value="1" label="10"></option>
-            <option value="2" label="100"></option>
-            <option value="3" label="1000"></option>
-            <option value="4" label="10000"></option>
+            <option value="0" label="1x"></option>
+            <option value="1" label="2x"></option>
+            <option value="2" label="4x"></option>
+            <option value="3" label="8x"></option>
+            <option value="4" label="16x"></option>
           </datalist>
         </div>
       </header>
@@ -847,7 +932,7 @@ function createShellMarkup(): string {
         <aside class="simulation-panel">
           <div class="panel-header">
             <h1>BPMN DES</h1>
-            <p id="status-line">Bereit</p>
+            <p id="status-line">Ready</p>
           </div>
           <section class="panel-section collapsible-section">
             <details open>
@@ -880,7 +965,7 @@ function createShellMarkup(): string {
                 <h2>Resources</h2>
               </summary>
               <div class="section-actions">
-                <button id="add-resource" class="icon-button compact-button" title="Ressource hinzufuegen" aria-label="Ressource hinzufuegen">
+                <button id="add-resource" class="icon-button compact-button" title="Add resource" aria-label="Add resource">
                   <i data-lucide="plus"></i>
                 </button>
               </div>
@@ -945,7 +1030,7 @@ function createShellMarkup(): string {
                 <h2>Export</h2>
               </summary>
               <div class="export-buttons">
-                <button id="export-json" class="text-button" disabled>JSON</button>
+                <button id="export-json" class="text-button" disabled>Full Simulation Log JSON</button>
                 <button id="export-results-csv" class="text-button" disabled>Simulation Results CSV</button>
                 <button id="export-event-log-csv" class="text-button" disabled>Event Log CSV</button>
               </div>
@@ -953,11 +1038,11 @@ function createShellMarkup(): string {
             </details>
           </section>
         </aside>
-        <div id="left-sidebar-resizer" class="sidebar-resizer left-sidebar-resizer" role="separator" aria-label="Linke Sidebar-Groesse aendern"></div>
+        <div id="left-sidebar-resizer" class="sidebar-resizer left-sidebar-resizer" role="separator" aria-label="Resize left sidebar"></div>
         <section class="diagram-shell">
           <div id="canvas"></div>
         </section>
-        <div id="right-sidebar-resizer" class="sidebar-resizer right-sidebar-resizer" role="separator" aria-label="Rechte Sidebar-Groesse aendern"></div>
+        <div id="right-sidebar-resizer" class="sidebar-resizer right-sidebar-resizer" role="separator" aria-label="Resize right sidebar"></div>
         <aside id="properties" class="properties-panel"></aside>
       </section>
       <input id="file-input" class="hidden-input" type="file" accept=".bpmn,.xml" />
@@ -969,7 +1054,7 @@ function createAppIcons(): void {
   createIcons({
     icons: {
       Download,
-      FileJson,
+      File,
       FilePlus,
       Play,
       Plus,
@@ -985,7 +1070,7 @@ function getElement<T extends HTMLElement>(id: string): T {
   const element = document.getElementById(id);
 
   if (!element) {
-    throw new Error(`Element #${id} nicht gefunden.`);
+    throw new Error(`Element #${id} not found.`);
   }
 
   return element as T;
@@ -1019,6 +1104,47 @@ function formatNumber(value: number): string {
   return value.toFixed(2);
 }
 
+function formatPercent(value: number): string {
+  if (!Number.isFinite(value)) {
+    return '-';
+  }
+
+  return `${formatNumber(value * 100)}%`;
+}
+
+function formatDurationHours(hours: number): string {
+  return formatDurationMinutes(hours * 60);
+}
+
+function formatDurationMinutes(minutes: number): string {
+  if (!Number.isFinite(minutes)) {
+    return '-';
+  }
+
+  const sign = minutes < 0 ? '-' : '';
+  const absolute = Math.abs(minutes);
+
+  if (absolute === 0) {
+    return '0m';
+  }
+
+  if (absolute < 10 && !Number.isInteger(absolute)) {
+    return `${sign}${formatNumber(absolute)}m`;
+  }
+
+  const totalMinutes = Math.round(absolute);
+  const days = Math.floor(totalMinutes / 1440);
+  const hours = Math.floor((totalMinutes % 1440) / 60);
+  const remainingMinutes = totalMinutes % 60;
+  const parts = [
+    days ? `${days}d` : undefined,
+    hours ? `${hours}h` : undefined,
+    remainingMinutes || (!days && !hours) ? `${remainingMinutes}m` : undefined
+  ].filter(Boolean);
+
+  return `${sign}${parts.join(' ')}`;
+}
+
 function currentSimulationTime(result: SimulationResult): number {
   if (result.currentTime !== undefined && Number.isFinite(result.currentTime)) {
     return result.currentTime;
@@ -1029,11 +1155,11 @@ function currentSimulationTime(result: SimulationResult): number {
 
 function createProcessStatsRows(result: SimulationResult): Array<[string, string | number]> {
   return [
-    ['Scope', 'Prozess'],
+    ['Scope', 'Process'],
     ['Completed', result.completedCases],
     ['Failed', result.failedCases],
-    ['Avg cycle time', formatNumber(result.cycleTimeAverage)],
-    ['P90 cycle time', formatNumber(result.cycleTimeP90)],
+    ['Avg cycle time', formatDurationHours(result.cycleTimeAverage)],
+    ['P90 cycle time', formatDurationHours(result.cycleTimeP90)],
     ['Throughput', formatNumber(result.throughputPerTimeUnit)],
     ['Deadlock suspicion', result.deadlockSuspicions],
     ['Unconsumed tokens', result.unconsumedTokens]
@@ -1062,7 +1188,10 @@ function collectOutputVariables(result: SimulationResult, elementId: string): st
   return [...variables].sort();
 }
 
-function describeSamples(samples: number[]): Record<'min' | 'max' | 'median' | 'avg', string> {
+function describeSamples(
+  samples: number[],
+  formatter: (value: number) => string = formatNumber
+): Record<'min' | 'max' | 'median' | 'avg', string> {
   if (!samples.length) {
     return {
       min: '-',
@@ -1075,10 +1204,10 @@ function describeSamples(samples: number[]): Record<'min' | 'max' | 'median' | '
   const sorted = [...samples].sort((a, b) => a - b);
 
   return {
-    min: formatNumber(sorted[0]),
-    max: formatNumber(sorted[sorted.length - 1]),
-    median: formatNumber(median(sorted)),
-    avg: formatNumber(sorted.reduce((sum, value) => sum + value, 0) / sorted.length)
+    min: formatter(sorted[0]),
+    max: formatter(sorted[sorted.length - 1]),
+    median: formatter(median(sorted)),
+    avg: formatter(sorted.reduce((sum, value) => sum + value, 0) / sorted.length)
   };
 }
 
@@ -1136,7 +1265,7 @@ function formatDateTimeLocal(date: Date): string {
 }
 
 function formatDateTimeDisplay(date: Date): string {
-  return new Intl.DateTimeFormat('de-DE', {
+  return new Intl.DateTimeFormat('en-GB', {
     dateStyle: 'short',
     timeStyle: 'short'
   }).format(date);
@@ -1175,7 +1304,7 @@ function createResourceRow(resource: SimulationResource, index: number): HTMLEle
   row.innerHTML = `
     <div class="resource-row-header">
       <strong>${escapeHtml(resource.name || resource.id)}</strong>
-      <button class="icon-button compact-button" type="button" title="Ressource entfernen" aria-label="Ressource entfernen" data-action="remove-resource" data-index="${index}">
+      <button class="icon-button compact-button" type="button" title="Remove resource" aria-label="Remove resource" data-action="remove-resource" data-index="${index}">
         <i data-lucide="trash-2"></i>
       </button>
     </div>
@@ -1295,6 +1424,42 @@ function download(fileName: string, content: string, mimeType: string): void {
   anchor.click();
 
   URL.revokeObjectURL(url);
+}
+
+function formatErrorDetail(error: unknown): { summary: string; message: string } {
+  if (error instanceof Error) {
+    const stackLine = error.stack
+      ?.split('\n')
+      .map((line) => line.trim())
+      .find((line) => line && line !== error.name && !line.startsWith(`${error.name}: ${error.message}`));
+    const summary = error.message || error.name || 'Unknown error';
+
+    return {
+      summary,
+      message: stackLine ? `${error.name}: ${summary} (${stackLine})` : `${error.name}: ${summary}`
+    };
+  }
+
+  if (typeof error === 'string') {
+    return {
+      summary: error,
+      message: error
+    };
+  }
+
+  try {
+    const message = JSON.stringify(error);
+
+    return {
+      summary: message || 'Unknown error',
+      message: message || 'Unknown error'
+    };
+  } catch {
+    return {
+      summary: 'Unknown error',
+      message: String(error)
+    };
+  }
 }
 
 function escapeHtml(value: string): string {

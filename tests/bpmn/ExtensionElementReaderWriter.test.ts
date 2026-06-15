@@ -1,8 +1,14 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import type { BpmnBusinessObject, BpmnElement } from '../../src/types/bpmn';
-import { readConditionExpression, readResourceCatalog, readTaskConfig } from '../../src/bpmn/ExtensionElementReader';
 import {
+  readConditionExpression,
+  readResourceCatalog,
+  readStartEventConfig,
+  readTaskConfig
+} from '../../src/bpmn/ExtensionElementReader';
+import {
+  updateArrivalConfig,
   updateConditionExpression,
   updateDurationConfig,
   updateOutputObjectFields,
@@ -234,6 +240,51 @@ test('ExtensionElementWriter persists the global resource catalog', () => {
       hourRanges: [{ start: 8, end: 17 }]
     }
   ]);
+});
+
+test('ExtensionElementWriter persists start event arrival calendars', () => {
+  const businessObject: BpmnBusinessObject = {
+    $type: 'bpmn:StartEvent',
+    id: 'start'
+  };
+  const element: BpmnElement = {
+    id: 'start',
+    businessObject
+  };
+  const bpmnFactory = {
+    create(type: string, properties: Record<string, unknown> = {}) {
+      return {
+        $type: type,
+        ...properties
+      };
+    }
+  };
+  const modeling = {
+    updateModdleProperties(
+      _element: BpmnElement,
+      moddleElement: BpmnBusinessObject,
+      properties: Record<string, unknown>
+    ) {
+      Object.assign(moddleElement, properties);
+    }
+  };
+
+  updateSimulationValue(element, 'startEvent', ['arrival', 'weekdays'], '1,2,3,4,5', bpmnFactory, modeling);
+  updateSimulationValue(element, 'startEvent', ['arrival', 'hourRanges'], '8-12,13-17', bpmnFactory, modeling);
+  updateSimulationValue(element, 'startEvent', ['arrival', 'numberOfCases'], '12', bpmnFactory, modeling);
+  updateArrivalConfig(element, { type: 'fixed', interval: 5, mean: 99 }, bpmnFactory, modeling);
+  updateArrivalConfig(element, { type: 'normal', interval: 5, mean: 3, stddev: 0.5 }, bpmnFactory, modeling);
+  updateArrivalConfig(element, { type: 'exponential', interval: 5, mean: 3 }, bpmnFactory, modeling);
+  updateArrivalConfig(element, { type: 'none', interval: 5, mean: 3 }, bpmnFactory, modeling);
+
+  const config = readStartEventConfig(businessObject);
+
+  assert.equal(config.arrival?.type, 'none');
+  assert.equal(config.arrival?.interval, undefined);
+  assert.equal(config.arrival?.mean, undefined);
+  assert.equal(config.arrival?.numberOfCases, 12);
+  assert.deepEqual(config.arrival?.weekdays, [1, 2, 3, 4, 5]);
+  assert.deepEqual(config.arrival?.hourRanges, [{ start: 8, end: 12 }, { start: 13, end: 17 }]);
 });
 
 test('ExtensionElementWriter persists output object fields from structured UI updates', () => {

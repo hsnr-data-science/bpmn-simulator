@@ -1,6 +1,6 @@
 export type DurationDistributionType = 'fixed' | 'uniform' | 'normal' | 'exponential' | 'triangular';
 
-export type ArrivalDistributionType = 'fixedInterval' | 'exponentialInterarrival' | 'schedule';
+export type ArrivalDistributionType = 'none' | 'fixed' | 'normal' | 'exponential';
 
 export type RetryDelayDistributionType = DurationDistributionType;
 
@@ -20,11 +20,13 @@ export type OutputGeneratorType = NumericOutputGeneratorType | StringOutputGener
 
 export type SimulationEventType =
   | 'CASE_ARRIVAL'
+  | 'EXTERNAL_EVENT_OCCURRED'
   | 'TOKEN_ENTER_ELEMENT'
   | 'TASK_START'
   | 'TASK_COMPLETE'
   | 'TIMER_FIRED'
   | 'MESSAGE_RECEIVED'
+  | 'SIGNAL_RECEIVED'
   | 'TOKEN_LEAVE_ELEMENT'
   | 'PROCESS_INSTANCE_COMPLETE'
   | 'TASK_FAILED'
@@ -109,8 +111,13 @@ export type ArrivalConfig = {
   type?: ArrivalDistributionType;
   interval?: number;
   mean?: number;
-  schedule?: string;
+  stddev?: number;
+  min?: number;
+  max?: number;
+  lambda?: number;
   numberOfCases?: number;
+  weekdays?: Weekday[];
+  hourRanges?: HourRange[];
 };
 
 export type BranchConfig = {
@@ -163,9 +170,12 @@ export type Token = {
   caseId: number;
   elementId: string;
   attempt: number;
+  processId?: string;
 };
 
 export type CaseStatus = 'completed' | 'failed' | 'running';
+
+export type CaseTrigger = 'arrival' | 'externalEvent' | 'message' | 'signal' | 'subProcess';
 
 export type OutputValue = string | number;
 
@@ -173,6 +183,11 @@ export type CaseOutputValue = OutputValue | Record<string, OutputValue>;
 
 export type CaseTrace = {
   id: number;
+  processId?: string;
+  trigger?: CaseTrigger;
+  parentCaseId?: number;
+  triggerElementId?: string;
+  triggerEventKey?: string;
   startTime: number;
   endTime: number;
   cycleTime: number;
@@ -209,6 +224,12 @@ export type ResourceMetrics = {
   waitTimeSamples?: number[];
   serviceTime: number;
   serviceTimeSamples?: number[];
+  firstTaskStartTime?: number;
+  lastTaskEndTime?: number;
+  capacity?: number;
+  weekdays?: Weekday[];
+  hourRanges?: HourRange[];
+  utilization?: number;
 };
 
 export type FlowMetrics = {
@@ -223,6 +244,8 @@ export type SimulationLogEntry = {
   level: 'info' | 'warning' | 'error';
   eventType?: SimulationEventType;
   caseId?: number;
+  sourceCaseId?: number;
+  attempt?: number;
   message: string;
   elementId?: string;
   elementName?: string;

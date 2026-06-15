@@ -61,16 +61,16 @@ export function classifyBpmnElement(element: BpmnBusinessObject): Classification
     };
   }
 
-  if (isMessageEvent(element)) {
-    return {
-      kind: 'messageEvent',
-      supported: false,
-      reason: 'Message Events sind vorbereitet, aber noch nicht implementiert.'
-    };
-  }
-
   if (isTimerIntermediateEvent(element)) {
     return { kind: 'timerIntermediateEvent', supported: true };
+  }
+
+  if (isMessageEvent(element)) {
+    return { kind: 'messageEvent', supported: true };
+  }
+
+  if (isSignalEvent(element)) {
+    return { kind: 'signalEvent', supported: true };
   }
 
   if (type === 'bpmn:SubProcess') {
@@ -155,6 +155,12 @@ function isTimerIntermediateEvent(element: BpmnBusinessObject): boolean {
 function isMessageEvent(element: BpmnBusinessObject): boolean {
   return (element.eventDefinitions ?? []).some((definition) => {
     return definition.$type === 'bpmn:MessageEventDefinition';
+  });
+}
+
+function isSignalEvent(element: BpmnBusinessObject): boolean {
+  return (element.eventDefinitions ?? []).some((definition) => {
+    return definition.$type === 'bpmn:SignalEventDefinition';
   });
 }
 

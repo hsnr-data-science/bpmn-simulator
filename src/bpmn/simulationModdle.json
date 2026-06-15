@@ -127,8 +127,13 @@
         { "name": "type", "type": "String", "isAttr": true },
         { "name": "interval", "type": "String", "isAttr": true },
         { "name": "mean", "type": "String", "isAttr": true },
-        { "name": "schedule", "type": "String", "isAttr": true },
-        { "name": "numberOfCases", "type": "String", "isAttr": true }
+        { "name": "stddev", "type": "String", "isAttr": true },
+        { "name": "min", "type": "String", "isAttr": true },
+        { "name": "max", "type": "String", "isAttr": true },
+        { "name": "lambda", "type": "String", "isAttr": true },
+        { "name": "numberOfCases", "type": "String", "isAttr": true },
+        { "name": "weekdays", "type": "String", "isAttr": true },
+        { "name": "hourRanges", "type": "String", "isAttr": true }
       ]
     },
     {

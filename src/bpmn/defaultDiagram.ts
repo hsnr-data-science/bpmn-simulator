@@ -19,7 +19,7 @@ export const defaultDiagram = `<?xml version="1.0" encoding="UTF-8"?>
     <bpmn:startEvent id="StartEvent_Order" name="Order received">
       <bpmn:extensionElements>
         <sim:startEventConfig>
-          <sim:arrival type="exponentialInterarrival" mean="1.5" numberOfCases="250" />
+          <sim:arrival type="exponential" mean="1.5" numberOfCases="250" />
         </sim:startEventConfig>
       </bpmn:extensionElements>
       <bpmn:outgoing>Flow_Start_Check</bpmn:outgoing>

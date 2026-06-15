@@ -1,4 +1,5 @@
 import type { CaseTrace, ResourceMetrics, SimulationLogEntry, SimulationResult } from '../types/simulation';
+import { workingTimeBetween } from '../simulation/ResourceCalendar';
 
 type Canvas = {
   addMarker(elementId: string, marker: string): void;
@@ -58,6 +59,8 @@ type FlowActivation = {
 type ProgressState = {
   result: SimulationResult;
   flowActivations: FlowActivation[];
+  timelineTimes: Map<number, number>;
+  activeTimelineIds: Set<number>;
   currentTime: number;
   lastEmit: number;
   onProgress: ProgressCallback;
@@ -70,7 +73,7 @@ const SIMULATION_UNIT_MS = 1000;
 const ZERO_TIME_STEP = 0.12;
 const END_HOLD = 0.35;
 const FLOW_ANIMATION_BASE_MS = 250;
-const PROGRESS_INTERVAL_MS = 120;
+const PROGRESS_INTERVAL_MS = 300;
 
 export class DesTokenAnimator {
   private readonly canvas: Canvas;
@@ -81,8 +84,10 @@ export class DesTokenAnimator {
   private flowTokens = new Set<SVGGElement>();
   private markedElements = new Map<string, Set<string>>();
   private frameIds = new Set<number>();
+  private timeoutIds = new Set<number>();
   private cancelHandlers = new Set<() => void>();
   private progressState?: ProgressState;
+  private nodeTokenRenderFrame = 0;
   private runId = 0;
   private speed = 1;
 
@@ -108,6 +113,14 @@ export class DesTokenAnimator {
 
     this.cancelHandlers.clear();
     this.frameIds.clear();
+    for (const timeoutId of this.timeoutIds) {
+      window.clearTimeout(timeoutId);
+    }
+    this.timeoutIds.clear();
+    if (this.nodeTokenRenderFrame) {
+      cancelAnimationFrame(this.nodeTokenRenderFrame);
+      this.nodeTokenRenderFrame = 0;
+    }
     this.clearFlowTokens();
     this.clearNodeTokens();
     this.clearMarkers();
@@ -118,14 +131,17 @@ export class DesTokenAnimator {
     this.stop();
     const runId = this.runId;
 
+    const enterTimeQueuesByCase = createEnterTimeQueuesByCase(result.log);
     const timelines = result.cases
-      .map((caseTrace) => buildTimeline(caseTrace, result.log, this.elementRegistry))
+      .map((caseTrace) => buildTimeline(caseTrace, enterTimeQueuesByCase.get(caseTrace.id), this.elementRegistry))
       .filter((timeline) => timeline.length > 0);
     this.setSpeed(speed);
     this.progressState = onProgress
       ? {
           result,
           flowActivations: createFlowActivations(timelines),
+          timelineTimes: new Map(timelines.map((_, index) => [index, 0] as const)),
+          activeTimelineIds: new Set(timelines.map((_, index) => index)),
           currentTime: 0,
           lastEmit: 0,
           onProgress
@@ -149,7 +165,8 @@ export class DesTokenAnimator {
     if (timeline[0].time > 0) {
       await this.waitSimulationUnits(timeline[0].time, runId, {
         from: 0,
-        to: timeline[0].time
+        to: timeline[0].time,
+        timelineIndex: index
       });
     }
 
@@ -162,10 +179,17 @@ export class DesTokenAnimator {
       const next = timeline[stepIndex + 1];
 
       this.enterNode(step.nodeId);
-      this.emitProgress(step.time, true);
+      this.emitProgress(step.time, false, index);
 
-      if (!next || !step.outgoingFlowId) {
+      if (!next) {
         await this.waitSimulationUnits(END_HOLD, runId);
+        this.leaveNode(step.nodeId);
+        this.completeTimeline(index);
+        continue;
+      }
+
+      if (!step.outgoingFlowId) {
+        await this.waitSimulationUnits(ZERO_TIME_STEP, runId);
         this.leaveNode(step.nodeId);
         continue;
       }
@@ -174,7 +198,8 @@ export class DesTokenAnimator {
 
       await this.waitSimulationUnits(dwell > 0 ? dwell : ZERO_TIME_STEP, runId, {
         from: step.time,
-        to: next.time
+        to: next.time,
+        timelineIndex: index
       });
 
       if (!this.isCurrentRun(runId)) {
@@ -183,7 +208,7 @@ export class DesTokenAnimator {
 
       this.leaveNode(step.nodeId);
       await this.animateFlow(step.outgoingFlowId, color, runId, index);
-      this.recordFlow(step.outgoingFlowId, next.time);
+      this.recordFlow(step.outgoingFlowId, next.time, index);
     }
   }
 
@@ -286,6 +311,17 @@ export class DesTokenAnimator {
   }
 
   private renderNodeTokens(): void {
+    if (this.nodeTokenRenderFrame) {
+      return;
+    }
+
+    this.nodeTokenRenderFrame = requestAnimationFrame(() => {
+      this.nodeTokenRenderFrame = 0;
+      this.renderNodeTokensNow();
+    });
+  }
+
+  private renderNodeTokensNow(): void {
     const layer = this.getNodeTokenLayer();
 
     if (!layer) {
@@ -394,6 +430,10 @@ export class DesTokenAnimator {
 
   private clearNodeTokens(): void {
     this.tokenCounts.clear();
+    if (this.nodeTokenRenderFrame) {
+      cancelAnimationFrame(this.nodeTokenRenderFrame);
+      this.nodeTokenRenderFrame = 0;
+    }
     this.nodeTokenLayer?.replaceChildren();
   }
 
@@ -436,14 +476,14 @@ export class DesTokenAnimator {
     this.markedElements.clear();
   }
 
-  private recordFlow(flowId: string, time: number): void {
+  private recordFlow(flowId: string, time: number, timelineIndex: number): void {
     const state = this.progressState;
 
     if (!state) {
       return;
     }
 
-    this.emitProgress(time, true);
+    this.emitProgress(time, false, timelineIndex);
   }
 
   private waitSimulationUnits(
@@ -452,6 +492,7 @@ export class DesTokenAnimator {
     progress?: {
       from: number;
       to: number;
+      timelineIndex?: number;
     }
   ): Promise<boolean> {
     const targetUnits = Math.max(0, units);
@@ -465,7 +506,7 @@ export class DesTokenAnimator {
 
     return new Promise((resolve) => {
       let settled = false;
-      let frameId = 0;
+      let timeoutId = 0;
       const finish = (value: boolean) => {
         if (settled) {
           return;
@@ -473,15 +514,20 @@ export class DesTokenAnimator {
 
         settled = true;
         this.cancelHandlers.delete(cancel);
-        this.frameIds.delete(frameId);
+        if (timeoutId) {
+          window.clearTimeout(timeoutId);
+          this.timeoutIds.delete(timeoutId);
+        }
         resolve(value);
       };
       const cancel = () => {
-        cancelAnimationFrame(frameId);
         finish(false);
       };
       const tick = (now: number) => {
-        this.frameIds.delete(frameId);
+        if (timeoutId) {
+          this.timeoutIds.delete(timeoutId);
+          timeoutId = 0;
+        }
 
         if (!this.isCurrentRun(runId)) {
           finish(false);
@@ -495,7 +541,7 @@ export class DesTokenAnimator {
         if (progress) {
           const consumedMs = targetUnits * SIMULATION_UNIT_MS - Math.max(0, remainingMs);
           const fraction = targetUnits > 0 ? Math.min(1, consumedMs / (targetUnits * SIMULATION_UNIT_MS)) : 1;
-          this.emitProgress(progress.from + (progress.to - progress.from) * fraction);
+          this.emitProgress(progress.from + (progress.to - progress.from) * fraction, false, progress.timelineIndex);
         }
 
         if (remainingMs <= 0) {
@@ -503,13 +549,17 @@ export class DesTokenAnimator {
           return;
         }
 
-        frameId = requestAnimationFrame(tick);
-        this.frameIds.add(frameId);
+        scheduleTick();
+      };
+      const scheduleTick = () => {
+        const delay = Math.max(16, Math.min(PROGRESS_INTERVAL_MS, remainingMs / this.speed));
+
+        timeoutId = window.setTimeout(() => tick(performance.now()), delay);
+        this.timeoutIds.add(timeoutId);
       };
 
       this.cancelHandlers.add(cancel);
-      frameId = requestAnimationFrame(tick);
-      this.frameIds.add(frameId);
+      scheduleTick();
     });
   }
 
@@ -517,17 +567,22 @@ export class DesTokenAnimator {
     return this.runId === runId;
   }
 
-  private emitProgress(time: number, force = false): void {
+  private emitProgress(time: number, force = false, timelineIndex?: number): void {
     const state = this.progressState;
 
     if (!state) {
       return;
     }
 
+    if (timelineIndex !== undefined && Number.isFinite(time)) {
+      state.timelineTimes.set(
+        timelineIndex,
+        Math.max(state.timelineTimes.get(timelineIndex) ?? 0, time)
+      );
+    }
+
     const now = performance.now();
-    const nextTime = Number.isFinite(time)
-      ? Math.max(state.currentTime, time)
-      : Number.POSITIVE_INFINITY;
+    const nextTime = calculateSynchronizedProgressTime(state, time);
 
     if (!force && now - state.lastEmit < PROGRESS_INTERVAL_MS) {
       return;
@@ -537,6 +592,33 @@ export class DesTokenAnimator {
     state.lastEmit = now;
     state.onProgress(createProgressResult(state.result, state.currentTime, state.flowActivations));
   }
+
+  private completeTimeline(timelineIndex: number): void {
+    const state = this.progressState;
+
+    if (!state) {
+      return;
+    }
+
+    state.activeTimelineIds.delete(timelineIndex);
+    this.emitProgress(state.timelineTimes.get(timelineIndex) ?? state.currentTime, true);
+  }
+}
+
+function calculateSynchronizedProgressTime(state: ProgressState, requestedTime: number): number {
+  if (!Number.isFinite(requestedTime)) {
+    return Number.POSITIVE_INFINITY;
+  }
+
+  if (!state.activeTimelineIds.size) {
+    return Math.max(state.currentTime, requestedTime);
+  }
+
+  const activeTimes = [...state.activeTimelineIds]
+    .map((timelineIndex) => state.timelineTimes.get(timelineIndex) ?? state.currentTime);
+  const synchronizedTime = Math.min(...activeTimes);
+
+  return Math.max(state.currentTime, synchronizedTime);
 }
 
 function createProgressResult(
@@ -567,7 +649,15 @@ function createProgressResult(
   const enterQueues = new Map<string, number[]>();
   const startQueues = new Map<string, number[]>();
   const waitQueues = new Map<string, number[]>();
-  const visibleLog = result.log.filter((entry) => (entry.time ?? 0) <= currentTime);
+  const visibleLog: SimulationLogEntry[] = [];
+
+  for (const entry of result.log) {
+    if ((entry.time ?? 0) > currentTime) {
+      break;
+    }
+
+    visibleLog.push(entry);
+  }
 
   for (const entry of visibleLog) {
     if (!entry.elementId) {
@@ -612,11 +702,20 @@ function createProgressResult(
           const waitTime = shiftQueue(waitQueues, key) ?? 0;
 
           if (resource) {
-            resource.taskCount += 1;
+            if ((entry.attempt ?? 0) === 0) {
+              resource.taskCount += 1;
+            }
+
             resource.waitTime += waitTime;
             resource.waitTimeSamples?.push(waitTime);
             resource.serviceTime += serviceTime;
             resource.serviceTimeSamples?.push(serviceTime);
+            resource.firstTaskStartTime = resource.firstTaskStartTime === undefined
+              ? startTime
+              : Math.min(resource.firstTaskStartTime, startTime);
+            resource.lastTaskEndTime = resource.lastTaskEndTime === undefined
+              ? time
+              : Math.max(resource.lastTaskEndTime, time);
           }
         }
         break;
@@ -688,6 +787,10 @@ function createProgressResult(
     .sort((a, b) => a - b);
   const pathProbabilities = calculatePathProbabilities(flowMetrics);
   const elapsedTime = Math.max(0, currentTime - (result.options.startTime ?? 0));
+  const resourceMetricsWithUtilization = resourceMetrics.map((metric) => ({
+    ...metric,
+    utilization: calculateResourceUtilization(metric)
+  }));
 
   return {
     ...result,
@@ -700,7 +803,7 @@ function createProgressResult(
     cycleTimeMax: finishedCycleTimes[finishedCycleTimes.length - 1] ?? 0,
     throughputPerTimeUnit: elapsedTime > 0 ? completedCases / elapsedTime : completedCases,
     elementMetrics,
-    resourceMetrics,
+    resourceMetrics: resourceMetricsWithUtilization,
     flowMetrics,
     log: visibleLog,
     warnings: visibleLog.filter((entry) => entry.level === 'warning').map((entry) => entry.message),
@@ -728,16 +831,26 @@ function resetResourceMetric(metric: ResourceMetrics): ResourceMetrics {
     waitTime: 0,
     waitTimeSamples: [],
     serviceTime: 0,
-    serviceTimeSamples: []
+    serviceTimeSamples: [],
+    firstTaskStartTime: undefined,
+    lastTaskEndTime: undefined,
+    utilization: 0
   };
+}
+
+function calculateResourceUtilization(metric: ResourceMetrics): number {
+  const workingHours = workingTimeBetween(metric.firstTaskStartTime, metric.lastTaskEndTime, metric);
+  const capacity = Math.max(1, Math.floor(metric.capacity ?? 1));
+  const availableCapacityHours = workingHours * capacity;
+
+  return availableCapacityHours > 0 ? (metric.serviceTime / 60) / availableCapacityHours : 0;
 }
 
 function buildTimeline(
   caseTrace: CaseTrace,
-  log: SimulationLogEntry[],
+  enterTimes: Map<string, number[]> | undefined,
   elementRegistry: ElementRegistry
 ): TimelineStep[] {
-  const enterTimes = createEnterTimeQueues(caseTrace.id, log);
   const timeline: TimelineStep[] = [];
   let previousTime = caseTrace.startTime;
 
@@ -754,7 +867,7 @@ function buildTimeline(
       continue;
     }
 
-    const queuedTimes = enterTimes.get(elementId) ?? [];
+    const queuedTimes = enterTimes?.get(elementId) ?? [];
     const time = queuedTimes.shift() ?? previousTime;
 
     timeline.push({
@@ -767,20 +880,23 @@ function buildTimeline(
   return timeline;
 }
 
-function createEnterTimeQueues(caseId: number, log: SimulationLogEntry[]): Map<string, number[]> {
-  const times = new Map<string, number[]>();
+function createEnterTimeQueuesByCase(log: SimulationLogEntry[]): Map<number, Map<string, number[]>> {
+  const timesByCase = new Map<number, Map<string, number[]>>();
 
   for (const entry of log) {
-    if (entry.caseId !== caseId || entry.eventType !== 'TOKEN_ENTER_ELEMENT' || !entry.elementId) {
+    if (entry.caseId === undefined || entry.eventType !== 'TOKEN_ENTER_ELEMENT' || !entry.elementId) {
       continue;
     }
 
+    const times = timesByCase.get(entry.caseId) ?? new Map<string, number[]>();
     const elementTimes = times.get(entry.elementId) ?? [];
+
     elementTimes.push(entry.time ?? 0);
     times.set(entry.elementId, elementTimes);
+    timesByCase.set(entry.caseId, times);
   }
 
-  return times;
+  return timesByCase;
 }
 
 function metricKey(caseId: number | undefined, elementId: string): string {

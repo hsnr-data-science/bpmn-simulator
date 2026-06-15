@@ -8,7 +8,8 @@ import {
   parseWeekdays,
   rangesToHours,
   serializeHourRanges,
-  serializeWeekdays
+  serializeWeekdays,
+  workingTimeBetween
 } from '../../src/simulation/ResourceCalendar';
 import type { ResourceConfig } from '../../src/types/simulation';
 
@@ -36,4 +37,5 @@ test('ResourceCalendar finds availability and adds working time over calendar ga
   assert.equal(nextResourceAvailability(calendar, 7), 8);
   assert.equal(nextResourceAvailability(calendar, 10), 32);
   assert.equal(addWorkingTime(8, 3, calendar), 33);
+  assert.equal(workingTimeBetween(8, 33, calendar), 3);
 });

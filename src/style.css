@@ -562,16 +562,20 @@ select {
 
 .des-task-stat-overlay {
   position: relative;
-  display: inline-flex;
-  gap: 6px;
-  max-width: 118px;
-  padding: 4px 6px;
+  display: grid;
+  gap: 2px;
+  width: 82px;
+  max-width: 82px;
+  padding: 3px 5px;
   border: 1px solid #b9c8c1;
   border-radius: 5px;
-  white-space: nowrap;
+  text-align: center;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 
 .des-task-stat-overlay span {
+  display: block;
   font-weight: 700;
 }
 
@@ -815,6 +819,69 @@ select {
   display: grid;
   gap: 8px;
   padding: 0 9px 9px;
+}
+
+.sim-calendar-block {
+  display: grid;
+  gap: 6px;
+}
+
+.sim-calendar-block > span {
+  color: #68716d;
+  font-size: 11px;
+  text-transform: uppercase;
+}
+
+.sim-calendar-chip-grid {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 4px;
+}
+
+.sim-calendar-hour-grid {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.sim-calendar-chip {
+  position: relative;
+  display: block;
+  min-width: 0;
+}
+
+.sim-calendar-chip input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.sim-calendar-chip span {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  min-height: 26px;
+  padding: 4px 5px;
+  border: 1px solid #c4ccc8;
+  border-radius: 6px;
+  color: #3f4945;
+  background: #ffffff;
+  font-size: 11px;
+  line-height: 1.1;
+  cursor: pointer;
+}
+
+.sim-calendar-chip input:checked + span {
+  border-color: #16796b;
+  color: #0f443b;
+  background: #e6f4f1;
+  font-weight: 700;
+}
+
+.sim-calendar-chip input:focus-visible + span {
+  outline: 2px solid #16796b;
+  outline-offset: 2px;
 }
 
 .sim-output-object-items {

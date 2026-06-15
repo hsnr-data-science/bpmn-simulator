@@ -51,12 +51,12 @@ export function readTaskConfig(element?: BpmnBusinessObject): TaskSimulationConf
   }
 
   return {
-    enabled: asBoolean(config.enabled),
-    duration: readDuration(config.duration as BpmnBusinessObject | undefined),
-    resource: readResource(config.resource as BpmnBusinessObject | undefined),
-    failure: readFailure(config.failure as BpmnBusinessObject | undefined),
-    outputObject: readOutputObject(config.outputObject as BpmnBusinessObject | undefined),
-    error: readError(config.serviceError as BpmnBusinessObject | undefined)
+    enabled: asBoolean(readAttribute(config, 'enabled')),
+    duration: readDuration(findChild(config, 'sim:Duration', 'duration')),
+    resource: readResource(findChild(config, 'sim:Resource', 'resource')),
+    failure: readFailure(findChild(config, 'sim:Failure', 'failure')),
+    outputObject: readOutputObject(findChild(config, 'sim:OutputObject', 'outputObject')),
+    error: readError(findChild(config, 'sim:ServiceError', 'serviceError'))
   };
 }
 
@@ -68,8 +68,8 @@ export function readStartEventConfig(element?: BpmnBusinessObject): StartEventSi
   }
 
   return {
-    enabled: asBoolean(config.enabled),
-    arrival: readArrival(config.arrival as BpmnBusinessObject | undefined)
+    enabled: asBoolean(readAttribute(config, 'enabled')),
+    arrival: readArrival(findChild(config, 'sim:Arrival', 'arrival'))
   };
 }
 
@@ -81,9 +81,9 @@ export function readSequenceFlowConfig(element?: BpmnBusinessObject): SequenceFl
   }
 
   return {
-    enabled: asBoolean(config.enabled),
+    enabled: asBoolean(readAttribute(config, 'enabled')),
     branch: {
-      probability: asNumber((config.branch as BpmnBusinessObject | undefined)?.probability)
+      probability: asNumber(readAttribute(findChild(config, 'sim:Branch', 'branch'), 'probability'))
     }
   };
 }
@@ -123,7 +123,7 @@ export function readConditionExpression(element?: BpmnBusinessObject): string | 
 
 export function readResourceCatalog(element?: BpmnBusinessObject): SimulationResource[] {
   const catalog = findExtension(element, RESOURCE_CATALOG_TYPE);
-  const resources = catalog?.resources as BpmnBusinessObject[] | undefined;
+  const resources = findChildren(catalog, 'sim:Resource', 'resources');
 
   if (!resources?.length) {
     return [];
@@ -138,7 +138,62 @@ export function findExtension(
   element: BpmnBusinessObject | undefined,
   type: string
 ): BpmnBusinessObject | undefined {
-  return element?.extensionElements?.values?.find((value) => value.$type === type);
+  return element?.extensionElements?.values?.find((value) => matchesExtensionType(value, type));
+}
+
+function findChild(
+  element: BpmnBusinessObject | undefined,
+  type: string,
+  propertyName: string
+): BpmnBusinessObject | undefined {
+  const direct = element?.[propertyName];
+
+  if (Array.isArray(direct)) {
+    return direct[0] as BpmnBusinessObject | undefined;
+  }
+
+  if (direct && typeof direct === 'object') {
+    return direct as BpmnBusinessObject;
+  }
+
+  return findChildren(element, type)?.[0];
+}
+
+function findChildren(
+  element: BpmnBusinessObject | undefined,
+  type: string,
+  propertyName?: string
+): BpmnBusinessObject[] | undefined {
+  const direct = propertyName ? element?.[propertyName] : undefined;
+
+  if (Array.isArray(direct)) {
+    return direct as BpmnBusinessObject[];
+  }
+
+  if (direct && typeof direct === 'object') {
+    return [direct as BpmnBusinessObject];
+  }
+
+  const children = (element?.$children as BpmnBusinessObject[] | undefined)
+    ?.filter((child) => matchesExtensionType(child, type));
+
+  return children?.length ? children : undefined;
+}
+
+function readAttribute(element: BpmnBusinessObject | undefined, key: string): unknown {
+  const attrs = element?.$attrs as Record<string, unknown> | undefined;
+
+  return element?.[key] ?? attrs?.[key];
+}
+
+function matchesExtensionType(element: BpmnBusinessObject | undefined, expected: string): boolean {
+  const type = asString(element?.$type) ?? asString((element?.$descriptor as BpmnBusinessObject | undefined)?.name);
+
+  return normalizeExtensionType(type) === normalizeExtensionType(expected);
+}
+
+function normalizeExtensionType(type: string | undefined): string {
+  return (type ?? '').toLowerCase();
 }
 
 function readDuration(element?: BpmnBusinessObject): DurationConfig | undefined {
@@ -147,13 +202,13 @@ function readDuration(element?: BpmnBusinessObject): DurationConfig | undefined 
   }
 
   return {
-    type: normalizeDurationType(asString(element.type)),
-    mean: asNumber(element.mean),
-    stddev: asNumber(element.stddev),
-    min: asNumber(element.min),
-    max: asNumber(element.max),
-    lambda: asNumber(element.lambda),
-    mode: asNumber(element.mode)
+    type: normalizeDurationType(asString(readAttribute(element, 'type'))),
+    mean: asNumber(readAttribute(element, 'mean')),
+    stddev: asNumber(readAttribute(element, 'stddev')),
+    min: asNumber(readAttribute(element, 'min')),
+    max: asNumber(readAttribute(element, 'max')),
+    lambda: asNumber(readAttribute(element, 'lambda')),
+    mode: asNumber(readAttribute(element, 'mode'))
   };
 }
 
@@ -163,30 +218,30 @@ function readResource(element?: BpmnBusinessObject): ResourceConfig | undefined 
   }
 
   return {
-    resourceId: asString(element.id),
-    resourceName: asString(element.name),
-    capacity: asInteger(element.capacity),
-    weekdays: parseWeekdays(asString(element.weekdays)),
-    hourRanges: parseHourRanges(asString(element.hourRanges))
+    resourceId: asString(readAttribute(element, 'id')),
+    resourceName: asString(readAttribute(element, 'name')),
+    capacity: asInteger(readAttribute(element, 'capacity')),
+    weekdays: parseWeekdays(asString(readAttribute(element, 'weekdays'))),
+    hourRanges: parseHourRanges(asString(readAttribute(element, 'hourRanges')))
   };
 }
 
 function readCatalogResource(element?: BpmnBusinessObject): SimulationResource | undefined {
-  const id = asString(element?.id);
+  const id = asString(readAttribute(element, 'id'));
 
   if (!id) {
     return undefined;
   }
 
   const schedule = normalizeResourceSchedule({
-    weekdays: parseWeekdays(asString(element?.weekdays)),
-    hourRanges: parseHourRanges(asString(element?.hourRanges))
+    weekdays: parseWeekdays(asString(readAttribute(element, 'weekdays'))),
+    hourRanges: parseHourRanges(asString(readAttribute(element, 'hourRanges')))
   });
 
   return {
     id,
-    name: asString(element?.name) ?? id,
-    capacity: asInteger(element?.capacity),
+    name: asString(readAttribute(element, 'name')) ?? id,
+    capacity: asInteger(readAttribute(element, 'capacity')),
     weekdays: schedule.weekdays,
     hourRanges: schedule.hourRanges
   };
@@ -198,14 +253,14 @@ function readFailure(element?: BpmnBusinessObject): FailureConfig | undefined {
   }
 
   return {
-    probability: asNumber(element.probability),
-    retryCount: asInteger(element.retryCount),
-    retryDelay: readDuration(element.retryDelay as BpmnBusinessObject | undefined)
+    probability: asNumber(readAttribute(element, 'probability')),
+    retryCount: asInteger(readAttribute(element, 'retryCount')),
+    retryDelay: readDuration(findChild(element, 'sim:RetryDelay', 'retryDelay'))
   };
 }
 
 function readOutputObject(element?: BpmnBusinessObject): OutputObjectConfig | undefined {
-  const fields = readOutputFields(element?.fields as BpmnBusinessObject[] | undefined);
+  const fields = readOutputFields(findChildren(element, 'sim:OutputField', 'fields'));
 
   return fields?.length ? { fields } : undefined;
 }
@@ -223,8 +278,8 @@ function readOutputFields(elements?: BpmnBusinessObject[]): OutputFieldConfig[] 
 }
 
 function readOutputField(element?: BpmnBusinessObject): OutputFieldConfig | undefined {
-  const key = asString(element?.key);
-  const type = normalizeOutputValueType(asString(element?.type));
+  const key = asString(readAttribute(element, 'key'));
+  const type = normalizeOutputValueType(asString(readAttribute(element, 'type')));
 
   if (!key || !type) {
     return undefined;
@@ -233,16 +288,16 @@ function readOutputField(element?: BpmnBusinessObject): OutputFieldConfig | unde
   return {
     key,
     type,
-    generator: normalizeOutputGenerator(asString(element?.generator), type),
-    value: asString(element?.value),
-    choices: parseOutputChoices(asString(element?.choices)),
-    mean: asNumber(element?.mean),
-    stddev: asNumber(element?.stddev),
-    min: asNumber(element?.min),
-    max: asNumber(element?.max),
-    mode: asNumber(element?.mode),
-    lambda: asNumber(element?.lambda),
-    length: asInteger(element?.length)
+    generator: normalizeOutputGenerator(asString(readAttribute(element, 'generator')), type),
+    value: asString(readAttribute(element, 'value')),
+    choices: parseOutputChoices(asString(readAttribute(element, 'choices'))),
+    mean: asNumber(readAttribute(element, 'mean')),
+    stddev: asNumber(readAttribute(element, 'stddev')),
+    min: asNumber(readAttribute(element, 'min')),
+    max: asNumber(readAttribute(element, 'max')),
+    mode: asNumber(readAttribute(element, 'mode')),
+    lambda: asNumber(readAttribute(element, 'lambda')),
+    length: asInteger(readAttribute(element, 'length'))
   };
 }
 
@@ -252,9 +307,9 @@ function readError(element?: BpmnBusinessObject): ErrorConfig | undefined {
   }
 
   return {
-    probability: asNumber(element.probability),
+    probability: asNumber(readAttribute(element, 'probability')),
     possibleErrors: readWeightedChildren<PossibleError>(
-      element.possibleErrors as BpmnBusinessObject[] | undefined,
+      findChildren(element, 'sim:PossibleError', 'possibleErrors'),
       'errorCode'
     )
   };
@@ -266,11 +321,16 @@ function readArrival(element?: BpmnBusinessObject): ArrivalConfig | undefined {
   }
 
   return {
-    type: asString(element.type) as ArrivalConfig['type'],
-    interval: asNumber(element.interval),
-    mean: asNumber(element.mean),
-    schedule: asString(element.schedule),
-    numberOfCases: asInteger(element.numberOfCases)
+    type: asString(readAttribute(element, 'type')) as ArrivalConfig['type'],
+    interval: asNumber(readAttribute(element, 'interval')),
+    mean: asNumber(readAttribute(element, 'mean')),
+    stddev: asNumber(readAttribute(element, 'stddev')),
+    min: asNumber(readAttribute(element, 'min')),
+    max: asNumber(readAttribute(element, 'max')),
+    lambda: asNumber(readAttribute(element, 'lambda')),
+    numberOfCases: asInteger(readAttribute(element, 'numberOfCases')),
+    weekdays: parseWeekdays(asString(readAttribute(element, 'weekdays'))),
+    hourRanges: parseHourRanges(asString(readAttribute(element, 'hourRanges')))
   };
 }
 
@@ -284,8 +344,8 @@ function readWeightedChildren<T extends { probability?: number }>(
 
   return children
     .map((child) => ({
-      [valueKey]: asString(child[valueKey]) ?? '',
-      probability: asNumber(child.probability)
+      [valueKey]: asString(readAttribute(child, valueKey)) ?? '',
+      probability: asNumber(readAttribute(child, 'probability'))
     }))
     .filter((entry) => entry[valueKey]) as T[];
 }

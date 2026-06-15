@@ -16,20 +16,36 @@ import {
   readSimulationConfig
 } from '../bpmn/ExtensionElementReader';
 import {
+  updateArrivalConfig,
   updateConditionExpression,
   updateDurationConfig,
   updateOutputObjectFields,
   updateSimulationValue
 } from '../bpmn/ExtensionElementWriter';
-import type { BpmnElement, BpmnFactory, Modeling } from '../types/bpmn';
+import type { BpmnBusinessObject, BpmnElement, BpmnFactory, Modeling } from '../types/bpmn';
 import type {
+  ArrivalConfig,
+  ArrivalDistributionType,
   DurationConfig,
   DurationDistributionType,
+  HourRange,
   OutputChoice,
   OutputFieldConfig,
   OutputGeneratorType,
-  OutputValueType
+  OutputValueType,
+  Weekday
 } from '../types/simulation';
+import {
+  DEFAULT_HOUR_RANGES,
+  DEFAULT_WEEKDAYS,
+  hoursToRanges,
+  normalizeHourRanges,
+  normalizeWeekdays,
+  rangesToHours,
+  serializeHourRanges,
+  serializeWeekdays,
+  WEEKDAY_OPTIONS
+} from '../simulation/ResourceCalendar';
 import { branchProbabilityEntries } from './entries/BranchProbabilityEntry';
 import { durationDistributionEntries } from './entries/DurationDistributionEntry';
 import { outputObjectEntries } from './entries/OutputObjectEntry';
@@ -47,6 +63,8 @@ type EntryDefinition = {
     | 'resourceSelect'
     | 'outputObjectList'
     | 'durationDistribution'
+    | 'arrivalDistribution'
+    | 'arrivalCalendar'
     | 'conditionExpression';
   type?: string;
   min?: string;
@@ -77,6 +95,7 @@ type CanvasWithRoot = {
 };
 
 const durationDrafts = new WeakMap<object, DurationConfig>();
+const arrivalDrafts = new WeakMap<object, ArrivalConfig>();
 const outputObjectDrafts = new WeakMap<object, OutputFieldConfig[]>();
 
 export default class SimulationPropertiesProvider {
@@ -117,7 +136,7 @@ function createEntries(element: BpmnElement): Entry[] {
   const definitions: EntryDefinition[] = [
     {
       id: 'sim-enabled',
-      label: 'In DES verwenden',
+      label: 'Use in DES',
       path: ['enabled'],
       control: 'checkbox'
     }
@@ -155,6 +174,10 @@ function createEntry(element: BpmnElement, definition: EntryDefinition): Entry {
       ? SimulationOutputObjectList
       : definition.control === 'durationDistribution'
         ? SimulationDurationDistribution
+        : definition.control === 'arrivalDistribution'
+          ? SimulationArrivalDistribution
+        : definition.control === 'arrivalCalendar'
+          ? SimulationArrivalCalendar
         : definition.control === 'conditionExpression'
           ? SimulationConditionExpression
       : definition.control === 'resourceSelect'
@@ -169,6 +192,10 @@ function createEntry(element: BpmnElement, definition: EntryDefinition): Entry {
       ? isOutputObjectListEdited
       : definition.control === 'durationDistribution'
         ? isDurationDistributionEdited
+        : definition.control === 'arrivalDistribution'
+          ? isArrivalDistributionEdited
+        : definition.control === 'arrivalCalendar'
+          ? isArrivalCalendarEdited
         : definition.control === 'conditionExpression'
           ? isConditionExpressionEdited
       : definition.control === 'select' || definition.control === 'resourceSelect'
@@ -269,11 +296,10 @@ function SimulationResourceSelect(props: Entry): unknown {
     element: props.element,
     label: props.label,
     getOptions: () => {
-      const process = canvas.getRootElement()?.businessObject;
-      const resources = readResourceCatalog(process);
+      const resources = readResourcesForElement(props.element.businessObject, canvas.getRootElement()?.businessObject);
 
       return [
-        { label: 'Keine Ressource', value: '' },
+        { label: 'No Resource', value: '' },
         ...resources.map((resource) => ({
           label: `${resource.name} (${resource.id})`,
           value: resource.id
@@ -285,6 +311,214 @@ function SimulationResourceSelect(props: Entry): unknown {
       updateSimulationValue(props.element, getConfigKind(props.element), props.path, value, bpmnFactory, modeling);
     }
   });
+}
+
+function readResourcesForElement(
+  element: BpmnBusinessObject | undefined,
+  root: BpmnBusinessObject | undefined
+) {
+  const owner = findOwningProcess(element);
+  const ownerResources = readResourceCatalog(owner);
+
+  if (ownerResources.length) {
+    return ownerResources;
+  }
+
+  const rootResources = collectRootResources(root);
+
+  return rootResources.length ? rootResources : ownerResources;
+}
+
+function findOwningProcess(element: BpmnBusinessObject | undefined): BpmnBusinessObject | undefined {
+  let current = element;
+
+  while (current) {
+    if (current.$type === 'bpmn:Process') {
+      return current;
+    }
+
+    current = current.$parent as BpmnBusinessObject | undefined;
+  }
+
+  return undefined;
+}
+
+function collectRootResources(root: BpmnBusinessObject | undefined) {
+  if (!root) {
+    return [];
+  }
+
+  if (root.$type === 'bpmn:Process') {
+    return readResourceCatalog(root);
+  }
+
+  if (root.$type === 'bpmn:Collaboration') {
+    return (root.participants ?? [])
+      .flatMap((participant) => {
+        const process = participant.processRef;
+
+        return typeof process === 'string'
+          ? []
+          : readResourceCatalog(process);
+      });
+  }
+
+  return [];
+}
+
+function SimulationArrivalDistribution(props: Entry): unknown {
+  const modeling = useService<Modeling>('modeling');
+  const bpmnFactory = useService<BpmnFactory>('bpmnFactory');
+  const arrival = getArrivalConfig(props.element);
+
+  const persist = (nextArrival: ArrivalConfig) => {
+    if (props.element.businessObject) {
+      arrivalDrafts.set(props.element.businessObject, nextArrival);
+    }
+
+    updateArrivalConfig(props.element, nextArrival, bpmnFactory, modeling);
+  };
+  const update = (patch: Partial<ArrivalConfig>) => {
+    persist(normalizeArrivalPatch({ ...getArrivalConfig(props.element), ...patch }));
+  };
+
+  return h('div', {
+    id: props.id,
+    class: 'sim-duration-editor sim-arrival-distribution-editor'
+  }, [
+    h('label', { class: 'sim-field-row' }, [
+      h('span', null, props.label),
+      h('select', {
+        value: arrival.type ?? 'fixed',
+        onChange: (event: Event) => persist(setArrivalTypeDefaults(
+          arrival,
+          (event.currentTarget as HTMLSelectElement).value as ArrivalDistributionType
+        ))
+      }, ARRIVAL_DISTRIBUTION_OPTIONS.map((option) => h('option', { value: option.value }, option.label)))
+    ]),
+    h('div', { class: 'sim-duration-parameters' }, renderArrivalParameters(arrival, update))
+  ]);
+}
+
+function getArrivalConfig(element: BpmnElement): ArrivalConfig {
+  if (element.businessObject && arrivalDrafts.has(element.businessObject)) {
+    return arrivalDrafts.get(element.businessObject) ?? { type: 'fixed', interval: 1 };
+  }
+
+  return normalizeArrivalPatch(readSimulationConfig(element.businessObject).arrival ?? { type: 'fixed', interval: 1 });
+}
+
+function renderArrivalParameters(
+  arrival: ArrivalConfig,
+  update: (patch: Partial<ArrivalConfig>) => void
+) {
+  if ((arrival.type ?? 'fixed') === 'none') {
+    return [
+      h('p', { class: 'sim-output-empty' }, 'No tokens are generated for this start event.')
+    ];
+  }
+
+  return getArrivalParameters(arrival.type ?? 'fixed').map((parameter) => renderNumberParameter(
+    parameter.label,
+    Number(arrival[parameter.key] ?? parameter.defaultValue),
+    (value) => update({ [parameter.key]: value }),
+    parameter.min,
+    undefined,
+    parameter.step
+  ));
+}
+
+function SimulationArrivalCalendar(props: Entry): unknown {
+  const modeling = useService<Modeling>('modeling');
+  const bpmnFactory = useService<BpmnFactory>('bpmnFactory');
+  const arrival = readSimulationConfig(props.element.businessObject).arrival ?? {};
+  const weekdays = getCalendarWeekdays(arrival);
+  const hours = getCalendarHours(arrival);
+  const persistWeekdays = (nextWeekdays: Weekday[]) => {
+    updateSimulationValue(
+      props.element,
+      'startEvent',
+      ['arrival', 'weekdays'],
+      serializeWeekdays(nextWeekdays),
+      bpmnFactory,
+      modeling
+    );
+  };
+  const persistHours = (nextHours: number[]) => {
+    updateSimulationValue(
+      props.element,
+      'startEvent',
+      ['arrival', 'hourRanges'],
+      serializeHourRanges(hoursToRanges(nextHours)),
+      bpmnFactory,
+      modeling
+    );
+  };
+
+  return h('details', {
+    id: props.id,
+    class: 'sim-arrival-calendar sim-collapsible-list',
+    open: true
+  }, [
+    h('summary', { class: 'sim-collapsible-summary' }, [
+      h('span', null, props.label),
+      h('small', null, formatCalendarSummary(weekdays, hoursToRanges(hours)))
+    ]),
+    h('div', { class: 'sim-collapsible-body' }, [
+      h('div', { class: 'sim-calendar-block' }, [
+        h('span', null, 'Days'),
+        h('div', { class: 'sim-calendar-chip-grid' }, WEEKDAY_OPTIONS.map((day) => {
+          const checked = weekdays.includes(day.value);
+
+          return h('label', { class: 'sim-calendar-chip', key: `day-${day.value}` }, [
+            h('input', {
+              type: 'checkbox',
+              value: String(day.value),
+              checked,
+              onChange: (event: Event) => {
+                const input = event.currentTarget as HTMLInputElement;
+                const next = toggleCalendarValue(weekdays, day.value, input.checked);
+
+                if (!next.length) {
+                  input.checked = true;
+                  return;
+                }
+
+                persistWeekdays(next);
+              }
+            }),
+            h('span', null, day.label)
+          ]);
+        }))
+      ]),
+      h('div', { class: 'sim-calendar-block' }, [
+        h('span', null, 'Hours'),
+        h('div', { class: 'sim-calendar-chip-grid sim-calendar-hour-grid' }, ALL_HOURS.map((hour) => {
+          const checked = hours.includes(hour);
+
+          return h('label', { class: 'sim-calendar-chip sim-calendar-hour-chip', key: `hour-${hour}` }, [
+            h('input', {
+              type: 'checkbox',
+              value: String(hour),
+              checked,
+              onChange: (event: Event) => {
+                const input = event.currentTarget as HTMLInputElement;
+                const next = toggleCalendarValue(hours, hour, input.checked);
+
+                if (!next.length) {
+                  input.checked = true;
+                  return;
+                }
+
+                persistHours(next);
+              }
+            }),
+            h('span', null, formatHourRangeLabel(hour))
+          ]);
+        }))
+      ])
+    ])
+  ]);
 }
 
 function SimulationDurationDistribution(props: Entry): unknown {
@@ -376,7 +610,7 @@ function SimulationOutputObjectList(props: Entry): unknown {
       }, '+ Add'),
       fields.length
         ? h('div', { class: 'sim-output-object-items' }, fields.map((field, index) => renderOutputField(field, index, updateFields)))
-        : h('p', { class: 'sim-output-empty' }, 'Keine Output-Felder konfiguriert.')
+        : h('p', { class: 'sim-output-empty' }, 'No output fields configured.')
     ])
   ]);
 }
@@ -422,7 +656,7 @@ function renderOutputField(
       })
     ]),
     h('label', null, [
-      h('span', null, 'Typ'),
+      h('span', null, 'Type'),
       h('select', {
         value: field.type,
         onChange: (event: Event) => update(setTypeDefaults(field, (event.currentTarget as HTMLSelectElement).value as OutputValueType))
@@ -447,7 +681,7 @@ function renderGeneratorParameters(
     if (field.generator === 'categorical') {
       return [
         h('label', null, [
-          h('span', null, 'Werte'),
+          h('span', null, 'Values'),
           h('input', {
             type: 'text',
             defaultValue: choicesToText(field.choices),
@@ -461,16 +695,16 @@ function renderGeneratorParameters(
     }
 
     if (field.generator === 'fixed') {
-      return [renderTextParameter('Wert', field.value ?? '', (value) => update({ value }))];
+      return [renderTextParameter('Value', field.value ?? '', (value) => update({ value }))];
     }
 
-    return [renderNumberParameter('Laenge', field.length ?? 8, (value) => update({ length: value }), 1, 64, 1)];
+    return [renderNumberParameter('Length', field.length ?? 8, (value) => update({ length: value }), 1, 64, 1)];
   }
 
   if (field.generator === 'randomChoice') {
     return [
       h('label', null, [
-        h('span', null, 'Werte'),
+        h('span', null, 'Values'),
           h('input', {
             type: 'text',
             defaultValue: choicesToText(field.choices),
@@ -484,7 +718,7 @@ function renderGeneratorParameters(
   }
 
   if (field.generator === 'fixed') {
-    return [renderNumberParameter('Wert', Number(field.value ?? field.mean ?? 0), (value) => update({ value: String(value), mean: value }))];
+    return [renderNumberParameter('Value', Number(field.value ?? field.mean ?? 0), (value) => update({ value: String(value), mean: value }))];
   }
 
   return getDistributionParameters(field.generator).map((parameter) => renderNumberParameter(
@@ -528,6 +762,28 @@ function isDurationDistributionEdited(...args: unknown[]): boolean {
   return Boolean(props?.element && readSimulationConfig(props.element.businessObject).duration);
 }
 
+function isArrivalDistributionEdited(...args: unknown[]): boolean {
+  const props = args[1] as Entry | undefined;
+  const arrival = props?.element ? readSimulationConfig(props.element.businessObject).arrival : undefined;
+
+  return Boolean(
+    arrival?.type ||
+    arrival?.interval !== undefined ||
+    arrival?.mean !== undefined ||
+    arrival?.stddev !== undefined
+  );
+}
+
+function isArrivalCalendarEdited(...args: unknown[]): boolean {
+  const props = args[1] as Entry | undefined;
+  const arrival = props?.element ? readSimulationConfig(props.element.businessObject).arrival : undefined;
+
+  return Boolean(
+    normalizeWeekdays(arrival?.weekdays).length ||
+    normalizeHourRanges(arrival?.hourRanges).length
+  );
+}
+
 function isConditionExpressionEdited(...args: unknown[]): boolean {
   const props = args[1] as Entry | undefined;
 
@@ -540,6 +796,13 @@ const DURATION_DISTRIBUTION_OPTIONS: Array<{ label: string; value: DurationDistr
   { label: 'Normal', value: 'normal' },
   { label: 'Exponential', value: 'exponential' },
   { label: 'Triangular', value: 'triangular' }
+];
+
+const ARRIVAL_DISTRIBUTION_OPTIONS: Array<{ label: string; value: ArrivalDistributionType }> = [
+  { label: 'None', value: 'none' },
+  { label: 'Fixed', value: 'fixed' },
+  { label: 'Normal', value: 'normal' },
+  { label: 'Exponential', value: 'exponential' }
 ];
 
 const OUTPUT_TYPE_OPTIONS: Array<{ label: string; value: OutputValueType }> = [
@@ -562,6 +825,36 @@ const STRING_GENERATOR_OPTIONS: Array<{ label: string; value: OutputGeneratorTyp
   { label: 'Categorical', value: 'categorical' },
   { label: 'Fixed', value: 'fixed' }
 ];
+
+const ALL_HOURS = Array.from({ length: 24 }, (_, hour) => hour);
+
+function getCalendarWeekdays(arrival: ArrivalConfig): Weekday[] {
+  const weekdays = normalizeWeekdays(arrival.weekdays);
+
+  return weekdays.length ? weekdays : [...DEFAULT_WEEKDAYS];
+}
+
+function getCalendarHours(arrival: ArrivalConfig): number[] {
+  const hours = rangesToHours(arrival.hourRanges);
+
+  return hours.length ? hours : rangesToHours(DEFAULT_HOUR_RANGES);
+}
+
+function toggleCalendarValue<T extends number>(values: T[], value: T, checked: boolean): T[] {
+  const next = checked
+    ? [...new Set([...values, value])]
+    : values.filter((item) => item !== value);
+
+  return next.sort((a, b) => a - b);
+}
+
+function formatCalendarSummary(weekdays: Weekday[], hourRanges: HourRange[]): string {
+  return `${weekdays.length}d/${rangesToHours(hourRanges).length}h`;
+}
+
+function formatHourRangeLabel(hour: number): string {
+  return `${String(hour).padStart(2, '0')}-${String(hour + 1).padStart(2, '0')}`;
+}
 
 function createDefaultOutputField(index: number): OutputFieldConfig {
   return {
@@ -669,6 +962,59 @@ function normalizeFieldPatch(field: OutputFieldConfig): OutputFieldConfig {
     ...field,
     generator: field.type === 'string' ? 'random' : 'fixed'
   };
+}
+
+function setArrivalTypeDefaults(arrival: ArrivalConfig, type: ArrivalDistributionType): ArrivalConfig {
+  const preserved = {
+    numberOfCases: arrival.numberOfCases,
+    weekdays: arrival.weekdays,
+    hourRanges: arrival.hourRanges
+  };
+
+  if (type === 'none') {
+    return {
+      ...preserved,
+      type
+    };
+  }
+
+  if (type === 'fixed') {
+    return {
+      ...preserved,
+      type,
+      interval: arrival.interval ?? arrival.mean ?? 1
+    };
+  }
+
+  if (type === 'normal') {
+    return {
+      ...preserved,
+      type,
+      mean: arrival.mean ?? arrival.interval ?? 1,
+      stddev: arrival.stddev ?? 1,
+      min: arrival.min ?? 0,
+      max: arrival.max
+    };
+  }
+
+  if (type === 'exponential') {
+    return {
+      ...preserved,
+      type,
+      mean: arrival.mean ?? arrival.interval ?? 1,
+      lambda: arrival.lambda
+    };
+  }
+
+  return {
+    ...preserved,
+    type: 'fixed',
+    interval: arrival.interval ?? arrival.mean ?? 1
+  };
+}
+
+function normalizeArrivalPatch(arrival: ArrivalConfig): ArrivalConfig {
+  return setArrivalTypeDefaults(arrival, arrival.type ?? 'fixed');
 }
 
 function setDurationTypeDefaults(duration: DurationConfig, type: DurationDistributionType): DurationConfig {
@@ -819,7 +1165,7 @@ function getDurationParameters(type: DurationDistributionType): Array<{
 }> {
   if (type === 'fixed') {
     return [
-      { key: 'mean', label: 'Dauer (min)', defaultValue: 1, min: 0 }
+      { key: 'mean', label: 'Duration (min)', defaultValue: 1, min: 0 }
     ];
   }
 
@@ -850,6 +1196,34 @@ function getDurationParameters(type: DurationDistributionType): Array<{
     { key: 'min', label: 'Min (min)', defaultValue: 0, min: 0 },
     { key: 'mode', label: 'Mode (min)', defaultValue: 5, min: 0 },
     { key: 'max', label: 'Max (min)', defaultValue: 10, min: 0 }
+  ];
+}
+
+function getArrivalParameters(type: ArrivalDistributionType): Array<{
+  key: 'interval' | 'mean' | 'stddev' | 'min' | 'max' | 'lambda';
+  label: string;
+  defaultValue: number;
+  min?: number;
+  step?: number;
+}> {
+  if (type === 'normal') {
+    return [
+      { key: 'mean', label: 'Mean Interarrival (min)', defaultValue: 1, min: 0 },
+      { key: 'stddev', label: 'Stddev (min)', defaultValue: 1, min: 0 },
+      { key: 'min', label: 'Min (min)', defaultValue: 0, min: 0 },
+      { key: 'max', label: 'Max (min)', defaultValue: 10, min: 0 }
+    ];
+  }
+
+  if (type === 'exponential') {
+    return [
+      { key: 'mean', label: 'Mean Interarrival (min)', defaultValue: 1, min: 0 },
+      { key: 'lambda', label: 'Lambda', defaultValue: 1, min: 0 }
+    ];
+  }
+
+  return [
+    { key: 'interval', label: 'Interval (min)', defaultValue: 1, min: 0 }
   ];
 }
 
@@ -890,51 +1264,26 @@ function conditionExpressionEntry(): EntryDefinition {
 function startEventEntries(): EntryDefinition[] {
   return [
     {
-      id: 'sim-arrival-type',
-      label: 'Arrival Distribution',
-      path: ['arrival', 'type'],
-      control: 'select',
-      options: [
-        { label: 'Fixed Interval', value: 'fixedInterval' },
-        { label: 'Exponential Interarrival', value: 'exponentialInterarrival' },
-        { label: 'Schedule', value: 'schedule' }
-      ]
-    },
-    {
-      id: 'sim-arrival-interval',
-      label: 'Arrival Interval',
-      path: ['arrival', 'interval'],
-      control: 'text',
-      type: 'number',
-      min: '0',
-      step: '0.1',
-      validate: 'nonNegativeNumber'
-    },
-    {
-      id: 'sim-arrival-mean',
-      label: 'Arrival Mean',
-      path: ['arrival', 'mean'],
-      control: 'text',
-      type: 'number',
-      min: '0',
-      step: '0.1',
-      validate: 'nonNegativeNumber'
-    },
-    {
-      id: 'sim-arrival-schedule',
-      label: 'Arrival Schedule',
-      path: ['arrival', 'schedule'],
-      control: 'text'
+      id: 'sim-arrival-distribution',
+      label: 'Arrival Distribution (minutes)',
+      path: ['arrival'],
+      control: 'arrivalDistribution'
     },
     {
       id: 'sim-number-of-cases',
-      label: 'Number Of Cases',
+      label: 'Number of Cases',
       path: ['arrival', 'numberOfCases'],
       control: 'text',
       type: 'number',
       min: '1',
       step: '1',
       validate: 'positiveInteger'
+    },
+    {
+      id: 'sim-arrival-calendar',
+      label: 'Arrival Calendar',
+      path: ['arrival'],
+      control: 'arrivalCalendar'
     }
   ];
 }
@@ -961,7 +1310,7 @@ const validators = {
 
     return Number.isFinite(number) && number >= 0 && number <= 1
       ? undefined
-      : 'Wert zwischen 0 und 1 erwartet.';
+      : 'Expected a value between 0 and 1.';
   },
   nonNegativeNumber(value: string): string | undefined {
     if (!value) {
@@ -970,7 +1319,7 @@ const validators = {
 
     const number = Number(value);
 
-    return Number.isFinite(number) && number >= 0 ? undefined : 'Nicht-negative Zahl erwartet.';
+    return Number.isFinite(number) && number >= 0 ? undefined : 'Expected a non-negative number.';
   },
   positiveInteger(value: string): string | undefined {
     if (!value) {
@@ -979,7 +1328,7 @@ const validators = {
 
     const number = Number(value);
 
-    return Number.isInteger(number) && number > 0 ? undefined : 'Ganzzahl groesser 0 erwartet.';
+    return Number.isInteger(number) && number > 0 ? undefined : 'Expected an integer greater than 0.';
   },
   nonNegativeInteger(value: string): string | undefined {
     if (!value) {
@@ -988,6 +1337,6 @@ const validators = {
 
     const number = Number(value);
 
-    return Number.isInteger(number) && number >= 0 ? undefined : 'Nicht-negative Ganzzahl erwartet.';
+    return Number.isInteger(number) && number >= 0 ? undefined : 'Expected a non-negative integer.';
   }
 };

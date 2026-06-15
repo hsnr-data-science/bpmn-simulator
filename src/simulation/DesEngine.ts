@@ -1,10 +1,16 @@
-import type { SimModel, SimNode } from '../types/bpmn';
-import type { SimulationConfig, SimulationEvent, Token } from '../types/simulation';
+import type { SimEventDefinition, SimMessageFlow, SimModel, SimNode } from '../types/bpmn';
+import type {
+  CaseOutputValue,
+  CaseTrigger,
+  SimulationConfig,
+  SimulationEvent,
+  Token
+} from '../types/simulation';
 import { BpmnSimulationInterpreter } from './BpmnSimulationInterpreter';
 import { EventQueue } from './EventQueue';
 import { sampleOutputObject } from './OutputObjects';
-import { bernoulli, pickWeighted, sampleDuration, sampleInterarrival, SeededRandom } from './RandomDistributions';
-import { addWorkingTime } from './ResourceCalendar';
+import { bernoulli, pickWeighted, sampleDuration, SeededRandom } from './RandomDistributions';
+import { addWorkingTime, nextResourceAvailability, normalizeResourceSchedule } from './ResourceCalendar';
 import { ResourceManager, type QueuedTask } from './ResourceManager';
 import { SimulationClock } from './SimulationClock';
 import { StatisticsCollector } from './StatisticsCollector';
@@ -13,6 +19,17 @@ import { TokenStore } from './TokenStore';
 type CaseArrivalPayload = {
   caseId: number;
   startNodeId: string;
+  processId?: string;
+  trigger?: CaseTrigger;
+  sourceCaseId?: number;
+  triggerElementId?: string;
+  triggerEventKey?: string;
+  variables?: Record<string, CaseOutputValue>;
+};
+
+type ExternalEventPayload = {
+  startNodeId: string;
+  eventKey?: string;
 };
 
 type TokenPayload = {
@@ -37,6 +54,20 @@ type TaskFailedPayload = ElementTokenPayload & {
   serviceError?: boolean;
 };
 
+type EventReceivedPayload = ElementTokenPayload & {
+  eventKey?: string;
+  sourceCaseId?: number;
+  variables?: Record<string, CaseOutputValue>;
+};
+
+type EventDelivery = {
+  eventKey: string;
+  sourceCaseId?: number;
+  correlationCaseId?: number;
+  sourceElementId?: string;
+  variables?: Record<string, CaseOutputValue>;
+};
+
 type TaskFailureOutcome =
   | 'retry'
   | {
@@ -55,6 +86,10 @@ export class DesEngine {
   private readonly resources = new ResourceManager();
   private readonly statistics = new StatisticsCollector();
   private readonly interpreter: BpmnSimulationInterpreter;
+  private readonly waitingEventTokens = new Map<string, ElementTokenPayload[]>();
+  private readonly pendingMessagesByTarget = new Map<string, EventDelivery[]>();
+  private readonly pendingMessagesByKey = new Map<string, EventDelivery[]>();
+  private nextCaseId = 1;
 
   constructor(model: SimModel, options: SimulationConfig) {
     this.model = model;
@@ -116,6 +151,9 @@ export class DesEngine {
       case 'CASE_ARRIVAL':
         this.handleCaseArrival(event.payload as CaseArrivalPayload, event.time);
         break;
+      case 'EXTERNAL_EVENT_OCCURRED':
+        this.handleExternalEvent(event.payload as ExternalEventPayload, event.time);
+        break;
       case 'TOKEN_ENTER_ELEMENT':
         this.enterElement((event.payload as TokenPayload).token, event.time);
         break;
@@ -138,53 +176,204 @@ export class DesEngine {
         this.failTask(event.payload as TaskFailedPayload, event.time);
         break;
       case 'RETRY_TASK':
-        this.enterElement((event.payload as TokenPayload).token, event.time);
+        this.retryTask((event.payload as TokenPayload).token, event.time);
         break;
       case 'MESSAGE_RECEIVED':
-        this.statistics.warn('MESSAGE_RECEIVED ist als Eventtyp vorbereitet, aber Message Events sind noch nicht implementiert.', undefined, event.time);
+        this.receiveMessage(event.payload as EventReceivedPayload, event.time);
+        break;
+      case 'SIGNAL_RECEIVED':
+        this.receiveSignal(event.payload as EventReceivedPayload, event.time);
         break;
     }
   }
 
   private scheduleCaseArrivals(): void {
-    const startNode = this.interpreter.getStartNode();
-    const arrival = startNode.params.arrival;
-    const numberOfCases = Math.max(1, Math.floor(this.options.numberOfRuns || arrival?.numberOfCases || 1));
-    let time = this.options.startTime ?? 0;
+    let scheduledStarts = 0;
 
-    for (let caseId = 1; caseId <= numberOfCases; caseId += 1) {
-      if (caseId > 1) {
-        if (arrival?.type === 'fixedInterval') {
-          time += arrival.interval ?? arrival.mean ?? 1;
-        } else if (arrival?.type === 'schedule') {
-          this.statistics.warn(
-            'arrivalDistribution "schedule" ist vorbereitet. Bis zur Kalenderauswertung wird fixedInterval als Fallback genutzt.',
-            startNode.id
-          );
-          time += arrival.interval ?? 1;
-        } else {
-          time += sampleInterarrival(arrival?.mean ?? arrival?.interval ?? 1, this.random);
-        }
+    for (const startNode of this.interpreter.getRootStartNodes()) {
+      if (startNode.params.enabled === false) {
+        continue;
       }
 
-      this.queue.schedule('CASE_ARRIVAL', time, {
-        caseId,
-        startNodeId: startNode.id
-      });
+      if (this.interpreter.isEventTriggeredStart(startNode)) {
+        if (this.isCorrelatedEventStart(startNode)) {
+          continue;
+        }
+
+        if (this.hasExplicitScheduledArrival(startNode)) {
+          scheduledStarts += this.scheduleExternalEventArrivals(startNode);
+        }
+
+        continue;
+      }
+
+      scheduledStarts += this.scheduleCaseArrivalsForStart(startNode, 'arrival');
     }
 
-    if (this.model.startNodeIds.length > 1) {
-      this.statistics.warn('Mehrere Start Events gefunden. Fuer diese Simulation wird das erste Start Event verwendet.');
+    if (!scheduledStarts) {
+      this.statistics.warn(
+        'Kein automatisch startendes Start Event geplant. Die Simulation wartet auf Message-/Signal-Starts oder explizite externe Ereignisse.'
+      );
     }
   }
 
   private handleCaseArrival(payload: CaseArrivalPayload, time: number): void {
-    this.tokens.createCase(payload.caseId, time);
+    const startNode = this.interpreter.getNode(payload.startNodeId);
+    const variables = withParentCaseId(payload.variables, payload.sourceCaseId);
+
+    this.tokens.createCase(payload.caseId, time, {
+      processId: payload.processId ?? startNode?.processId,
+      trigger: payload.trigger ?? 'arrival',
+      parentCaseId: payload.sourceCaseId,
+      triggerElementId: payload.triggerElementId ?? payload.startNodeId,
+      triggerEventKey: payload.triggerEventKey,
+      outputs: variables
+    });
     this.scheduleEnter(
       this.tokens.createToken(payload.caseId, payload.startNodeId),
       time,
       true
     );
+  }
+
+  private handleExternalEvent(payload: ExternalEventPayload, time: number): void {
+    const startNode = this.interpreter.getNode(payload.startNodeId);
+
+    if (!startNode) {
+      return;
+    }
+
+    const eventKey = payload.eventKey ?? this.getPrimaryEventKey(startNode);
+
+    this.statistics.info(
+      `Externes Ereignis "${eventKey ?? startNode.name}" startet Prozess "${this.getProcessName(startNode.processId)}".`,
+      startNode.id,
+      time
+    );
+    this.startCaseAtNode(startNode, time, {
+      trigger: 'externalEvent',
+      triggerElementId: startNode.id,
+      triggerEventKey: eventKey
+    });
+  }
+
+  private scheduleCaseArrivalsForStart(startNode: SimNode, trigger: CaseTrigger): number {
+    const arrival = startNode.params.arrival;
+
+    if (!this.hasScheduledArrival(startNode)) {
+      return 0;
+    }
+
+    const numberOfCases = Math.max(1, Math.floor(arrival?.numberOfCases ?? this.options.numberOfRuns ?? 1));
+    let time = this.nextArrivalAvailability(startNode, this.options.startTime ?? 0);
+
+    for (let index = 0; index < numberOfCases; index += 1) {
+      if (index > 0) {
+        time = this.nextArrivalTime(time, startNode);
+      }
+
+      this.queue.schedule('CASE_ARRIVAL', time, {
+        caseId: this.allocateCaseId(),
+        startNodeId: startNode.id,
+        processId: startNode.processId,
+        trigger,
+        triggerElementId: startNode.id
+      });
+    }
+
+    return numberOfCases;
+  }
+
+  private scheduleExternalEventArrivals(startNode: SimNode): number {
+    const arrival = startNode.params.arrival;
+
+    if (!this.hasScheduledArrival(startNode)) {
+      return 0;
+    }
+
+    const numberOfEvents = Math.max(1, Math.floor(arrival?.numberOfCases ?? this.options.numberOfRuns ?? 1));
+    const eventKey = this.getPrimaryEventKey(startNode);
+    let time = this.nextArrivalAvailability(startNode, this.options.startTime ?? 0);
+
+    for (let index = 0; index < numberOfEvents; index += 1) {
+      if (index > 0) {
+        time = this.nextArrivalTime(time, startNode);
+      }
+
+      this.queue.schedule('EXTERNAL_EVENT_OCCURRED', time, {
+        startNodeId: startNode.id,
+        eventKey
+      });
+    }
+
+    return numberOfEvents;
+  }
+
+  private nextArrivalTime(currentTime: number, startNode: SimNode): number {
+    const arrival = startNode.params.arrival;
+    const type = arrival?.type ?? 'fixed';
+
+    if (type === 'none') {
+      return Number.POSITIVE_INFINITY;
+    }
+
+    if (type === 'fixed') {
+      return this.nextArrivalAvailability(startNode, currentTime + minutesToHours(arrival?.interval ?? arrival?.mean ?? 1));
+    }
+
+    return this.nextArrivalAvailability(startNode, currentTime + minutesToHours(sampleArrivalDelay(arrival, this.random)));
+  }
+
+  private nextArrivalAvailability(startNode: SimNode, time: number): number {
+    const arrival = startNode.params.arrival;
+
+    if (!arrival || arrival.type === 'none') {
+      return time;
+    }
+
+    return nextResourceAvailability(normalizeResourceSchedule(arrival, 'businessHours'), time);
+  }
+
+  private hasScheduledArrival(startNode: SimNode): boolean {
+    return startNode.params.enabled !== false && startNode.params.arrival?.type !== 'none';
+  }
+
+  private hasExplicitScheduledArrival(startNode: SimNode): boolean {
+    return startNode.params.enabled !== false &&
+      Boolean(startNode.params.arrival) &&
+      startNode.params.arrival?.type !== 'none';
+  }
+
+  private isCorrelatedEventStart(startNode: SimNode): boolean {
+    return this.interpreter.getEventDefinitions(startNode, 'message', 'signal').length > 0;
+  }
+
+  private startCaseAtNode(
+    startNode: SimNode,
+    time: number,
+    options: {
+      trigger: CaseTrigger;
+      sourceCaseId?: number;
+      triggerElementId?: string;
+      triggerEventKey?: string;
+      variables?: Record<string, CaseOutputValue>;
+    }
+  ): number {
+    const caseId = this.allocateCaseId();
+
+    this.queue.schedule('CASE_ARRIVAL', time, {
+      caseId,
+      startNodeId: startNode.id,
+      processId: startNode.processId,
+      ...options,
+      variables: withParentCaseId(options.variables, options.sourceCaseId)
+    });
+
+    return caseId;
+  }
+
+  private allocateCaseId(): number {
+    return this.nextCaseId++;
   }
 
   private enterElement(token: Token, time: number): void {
@@ -229,6 +418,29 @@ export class DesEngine {
 
       this.statistics.recordCompletion(node);
       this.tokens.consume(token.caseId, time);
+      return;
+    }
+
+    if (this.interpreter.isCatchingMessageOrSignalEvent(node)) {
+      this.waitForMessageOrSignal(token, node, time);
+      return;
+    }
+
+    if (this.interpreter.isThrowingMessageOrSignalEvent(node)) {
+      this.publishMessageAndSignalEvents(node, token, time);
+
+      if (this.interpreter.isRootEndEvent(node)) {
+        this.queue.schedule('PROCESS_INSTANCE_COMPLETE', time, {
+          token,
+          elementId: node.id
+        });
+        return;
+      }
+
+      this.queue.schedule('TOKEN_LEAVE_ELEMENT', time, {
+        token,
+        elementId: node.id
+      });
       return;
     }
 
@@ -375,6 +587,331 @@ export class DesEngine {
     this.tokens.fail(payload.token.caseId, payload.errorCode, time);
   }
 
+  private retryTask(token: Token, time: number): void {
+    this.queue.schedule('TASK_START', time, {
+      token,
+      elementId: token.elementId,
+      arrivedAt: time
+    });
+  }
+
+  private waitForMessageOrSignal(token: Token, node: SimNode, time: number): void {
+    const messageDefinition = this.interpreter.getEventDefinitions(node, 'message')[0];
+
+    if (messageDefinition) {
+      this.waitForMessage(token, node, messageDefinition, time);
+      return;
+    }
+
+    const signalDefinition = this.interpreter.getEventDefinitions(node, 'signal')[0];
+
+    if (signalDefinition) {
+      this.waitForSignal(token, node, signalDefinition, time);
+      return;
+    }
+
+    this.queue.schedule('TOKEN_LEAVE_ELEMENT', time, {
+      token,
+      elementId: node.id
+    });
+  }
+
+  private waitForMessage(token: Token, node: SimNode, definition: SimEventDefinition, time: number): void {
+    const eventKey = this.interpreter.getEventKey(definition);
+    const delivery = this.shiftPendingMessage(node.id, eventKey, token.caseId);
+
+    if (delivery) {
+      this.scheduleEventReceived('MESSAGE_RECEIVED', token, node, delivery, time);
+      return;
+    }
+
+    this.enqueueWaitingToken(node.id, {
+      token,
+      elementId: node.id
+    });
+    this.statistics.info(
+      `Case ${token.caseId} wartet auf Message "${eventKey}".`,
+      node.id,
+      time
+    );
+  }
+
+  private waitForSignal(token: Token, node: SimNode, definition: SimEventDefinition, time: number): void {
+    const eventKey = this.interpreter.getEventKey(definition);
+
+    this.enqueueWaitingToken(node.id, {
+      token,
+      elementId: node.id
+    });
+    this.statistics.info(
+      `Case ${token.caseId} wartet auf Signal "${eventKey}".`,
+      node.id,
+      time
+    );
+  }
+
+  private receiveMessage(payload: EventReceivedPayload, time: number): void {
+    this.tokens.mergeOutputs(payload.token.caseId, payload.variables);
+    this.leaveElement(payload, time);
+  }
+
+  private receiveSignal(payload: EventReceivedPayload, time: number): void {
+    this.tokens.mergeOutputs(payload.token.caseId, payload.variables);
+    this.leaveElement(payload, time);
+  }
+
+  private publishMessageAndSignalEvents(node: SimNode, token: Token, time: number): void {
+    for (const definition of this.interpreter.getEventDefinitions(node, 'message')) {
+      this.publishMessage(node, definition, token, time);
+    }
+
+    for (const definition of this.interpreter.getEventDefinitions(node, 'signal')) {
+      this.publishSignal(node, definition, token, time);
+    }
+  }
+
+  private publishMessage(node: SimNode, definition: SimEventDefinition, token: Token, time: number): void {
+    const eventKey = this.interpreter.getEventKey(definition);
+    const delivery = this.createDelivery(eventKey, node, token);
+    const sourceFlows = (this.model.messageFlows ?? []).filter((flow) => flow.sourceId === node.id);
+    const matchingFlows = sourceFlows.filter((flow) => messageFlowMatches(flow, definition, eventKey));
+    const flows = matchingFlows.length ? matchingFlows : sourceFlows;
+    let delivered = false;
+
+    for (const flow of flows) {
+      delivered = this.deliverMessageToTarget(flow.targetId, {
+        ...delivery,
+        eventKey: flow.messageName ?? delivery.eventKey
+      }, time) || delivered;
+    }
+
+    if (!flows.length) {
+      delivered = this.deliverMessageByKey(eventKey, delivery, time);
+    }
+
+    this.statistics.info(
+      `Message "${eventKey}" von "${node.name}" veroeffentlicht.`,
+      node.id,
+      time
+    );
+
+    if (!delivered) {
+      this.statistics.warn(
+        `Message "${eventKey}" hat aktuell keinen passenden Empfaenger. Sie wird fuer spaetere Catch Events gepuffert.`,
+        node.id,
+        time
+      );
+      this.enqueuePendingMessageByKey(eventKey, delivery);
+    }
+  }
+
+  private publishSignal(node: SimNode, definition: SimEventDefinition, token: Token, time: number): void {
+    const eventKey = this.interpreter.getEventKey(definition);
+    const delivery = this.createDelivery(eventKey, node, token);
+    let delivered = 0;
+
+    for (const startNode of this.findMatchingStartNodes('signal', eventKey)) {
+      this.startCaseAtNode(startNode, time, {
+        trigger: 'signal',
+        sourceCaseId: token.caseId,
+        triggerElementId: node.id,
+        triggerEventKey: eventKey,
+        variables: delivery.variables
+      });
+      delivered += 1;
+    }
+
+    for (const catchNode of this.findMatchingCatchNodes('signal', eventKey)) {
+      const waiting = this.waitingEventTokens.get(catchNode.id) ?? [];
+
+      while (waiting.length) {
+        const waitingToken = waiting.shift();
+
+        if (!waitingToken) {
+          break;
+        }
+
+        this.scheduleEventReceived('SIGNAL_RECEIVED', waitingToken.token, catchNode, delivery, time);
+        delivered += 1;
+      }
+
+      this.waitingEventTokens.set(catchNode.id, waiting);
+    }
+
+    this.statistics.info(
+      `Signal "${eventKey}" von "${node.name}" gesendet.`,
+      node.id,
+      time
+    );
+
+    if (!delivered) {
+      this.statistics.warn(
+        `Signal "${eventKey}" hatte zum Sendezeitpunkt keinen wartenden Empfaenger.`,
+        node.id,
+        time
+      );
+    }
+  }
+
+  private deliverMessageToTarget(targetId: string, delivery: EventDelivery, time: number): boolean {
+    const targetNode = this.interpreter.getNode(targetId);
+
+    if (!targetNode) {
+      return false;
+    }
+
+    if (targetNode.kind === 'startEvent') {
+      this.startCaseAtNode(targetNode, time, {
+        trigger: 'message',
+        sourceCaseId: delivery.sourceCaseId,
+        triggerElementId: delivery.sourceElementId,
+        triggerEventKey: delivery.eventKey,
+        variables: delivery.variables
+      });
+      return true;
+    }
+
+    if (this.interpreter.isCatchingMessageOrSignalEvent(targetNode)) {
+      const waiting = this.waitingEventTokens.get(targetNode.id) ?? [];
+      const waitingPayload = shiftMatchingWaitingToken(waiting, delivery);
+
+      this.waitingEventTokens.set(targetNode.id, waiting);
+
+      if (waitingPayload) {
+        this.scheduleEventReceived('MESSAGE_RECEIVED', waitingPayload.token, targetNode, delivery, time);
+        return true;
+      }
+
+      this.enqueuePendingMessageByTarget(targetNode.id, delivery);
+      return true;
+    }
+
+    this.statistics.warn(
+      `Message "${delivery.eventKey}" zielt auf "${targetNode.name}", das kein wartendes Message Event ist.`,
+      targetNode.id,
+      time
+    );
+
+    return false;
+  }
+
+  private deliverMessageByKey(eventKey: string, delivery: EventDelivery, time: number): boolean {
+    let delivered = false;
+    const matchingStarts = this.findMatchingStartNodes('message', eventKey);
+    const matchingCatches = this.findMatchingCatchNodes('message', eventKey);
+
+    for (const startNode of matchingStarts) {
+      this.startCaseAtNode(startNode, time, {
+        trigger: 'message',
+        sourceCaseId: delivery.sourceCaseId,
+        triggerElementId: delivery.sourceElementId,
+        triggerEventKey: eventKey,
+        variables: delivery.variables
+      });
+      delivered = true;
+    }
+
+    for (const catchNode of matchingCatches) {
+      const waiting = this.waitingEventTokens.get(catchNode.id) ?? [];
+      const waitingPayload = shiftMatchingWaitingToken(waiting, delivery);
+
+      this.waitingEventTokens.set(catchNode.id, waiting);
+
+      if (waitingPayload) {
+        this.scheduleEventReceived('MESSAGE_RECEIVED', waitingPayload.token, catchNode, delivery, time);
+        return true;
+      }
+    }
+
+    if (matchingCatches.length) {
+      this.enqueuePendingMessageByKey(eventKey, delivery);
+      delivered = true;
+    }
+
+    return delivered;
+  }
+
+  private scheduleEventReceived(
+    type: 'MESSAGE_RECEIVED' | 'SIGNAL_RECEIVED',
+    token: Token,
+    node: SimNode,
+    delivery: EventDelivery,
+    time: number
+  ): void {
+    this.queue.schedule(type, time, {
+      token,
+      elementId: node.id,
+      eventKey: delivery.eventKey,
+      sourceCaseId: delivery.sourceCaseId,
+      variables: delivery.variables
+    });
+  }
+
+  private createDelivery(eventKey: string, node: SimNode, token: Token): EventDelivery {
+    const caseState = this.tokens.getCase(token.caseId);
+
+    return {
+      eventKey,
+      sourceCaseId: token.caseId,
+      correlationCaseId: caseState?.parentCaseId ?? token.caseId,
+      sourceElementId: node.id,
+      variables: cloneVariables(caseState?.outputs)
+    };
+  }
+
+  private enqueueWaitingToken(elementId: string, payload: ElementTokenPayload): void {
+    const waiting = this.waitingEventTokens.get(elementId) ?? [];
+
+    waiting.push(payload);
+    this.waitingEventTokens.set(elementId, waiting);
+  }
+
+  private shiftPendingMessage(targetId: string, eventKey: string, targetCaseId: number): EventDelivery | undefined {
+    const targeted = this.pendingMessagesByTarget.get(targetId);
+    const targetedDelivery = shiftMatchingDelivery(targeted, targetCaseId);
+
+    if (targetedDelivery) {
+      return targetedDelivery;
+    }
+
+    const keyed = this.pendingMessagesByKey.get(eventKey);
+
+    return shiftMatchingDelivery(keyed, targetCaseId);
+  }
+
+  private enqueuePendingMessageByTarget(targetId: string, delivery: EventDelivery): void {
+    const pending = this.pendingMessagesByTarget.get(targetId) ?? [];
+
+    pending.push(delivery);
+    this.pendingMessagesByTarget.set(targetId, pending);
+  }
+
+  private enqueuePendingMessageByKey(eventKey: string, delivery: EventDelivery): void {
+    const pending = this.pendingMessagesByKey.get(eventKey) ?? [];
+
+    pending.push(delivery);
+    this.pendingMessagesByKey.set(eventKey, pending);
+  }
+
+  private findMatchingStartNodes(type: SimEventDefinition['type'], eventKey: string): SimNode[] {
+    return this.interpreter.getRootStartNodes().filter((node) => {
+      return this.eventDefinitionsMatch(node, type, eventKey);
+    });
+  }
+
+  private findMatchingCatchNodes(type: SimEventDefinition['type'], eventKey: string): SimNode[] {
+    return [...this.model.nodes.values()].filter((node) => {
+      return this.interpreter.isCatchingMessageOrSignalEvent(node) &&
+        this.eventDefinitionsMatch(node, type, eventKey);
+    });
+  }
+
+  private eventDefinitionsMatch(node: SimNode, type: SimEventDefinition['type'], eventKey: string): boolean {
+    return this.interpreter.getEventDefinitions(node, type).some((definition) => {
+      return eventDefinitionKeys(definition, this.interpreter.getEventKey(definition)).includes(eventKey);
+    });
+  }
+
   private leaveElement(payload: ElementTokenPayload, time: number): void {
     const node = this.interpreter.getNode(payload.elementId);
 
@@ -451,7 +988,14 @@ export class DesEngine {
     const serviceTime = sampleDuration(node.params.duration, this.random);
     const completionTime = addWorkingTime(time, minutesToHours(serviceTime), node.params.resource);
 
-    this.statistics.recordService(node, hoursToMinutes(time - arrivedAt), serviceTime);
+    this.statistics.recordService(
+      node,
+      hoursToMinutes(time - arrivedAt),
+      serviceTime,
+      time,
+      completionTime,
+      token.attempt === 0
+    );
     this.queue.schedule('TASK_COMPLETE', completionTime, {
       token,
       elementId: node.id,
@@ -516,6 +1060,20 @@ export class DesEngine {
     }
   }
 
+  private getPrimaryEventKey(node: SimNode): string | undefined {
+    const definition = this.interpreter.getEventDefinitions(node, 'message', 'signal', 'timer')[0];
+
+    return definition ? this.interpreter.getEventKey(definition) : undefined;
+  }
+
+  private getProcessName(processId: string | undefined): string {
+    if (!processId) {
+      return this.model.name;
+    }
+
+    return this.model.processes?.get(processId)?.name ?? processId;
+  }
+
   private logUnsupportedElements(): void {
     for (const elementId of this.model.unsupportedElementIds) {
       const node = this.model.nodes.get(elementId);
@@ -528,7 +1086,14 @@ export class DesEngine {
   }
 
   private recordEvent(event: SimulationEvent): void {
-    const payload = event.payload as Partial<TokenPayload & ElementTokenPayload & CaseArrivalPayload & TaskCompletePayload>;
+    const payload = event.payload as Partial<
+      TokenPayload &
+      ElementTokenPayload &
+      CaseArrivalPayload &
+      ExternalEventPayload &
+      TaskCompletePayload &
+      EventReceivedPayload
+    >;
     const token = payload.token;
     const elementId = payload.elementId ?? token?.elementId ?? payload.startNodeId;
     const node = elementId ? this.interpreter.getNode(elementId) : undefined;
@@ -538,10 +1103,12 @@ export class DesEngine {
     this.statistics.event(event.type, event.type, {
       time: event.time,
       caseId,
+      sourceCaseId: payload.sourceCaseId,
+      attempt: token?.attempt,
       elementId,
       elementName: node?.name,
       resourceId: payload.resourceId ?? node?.params.resource?.resourceId,
-      variables: caseState?.outputs
+      variables: caseState?.outputs ?? payload.variables
     });
   }
 }
@@ -565,4 +1132,102 @@ function minutesToHours(minutes: number): number {
 
 function hoursToMinutes(hours: number): number {
   return Math.max(0, hours) * 60;
+}
+
+function sampleArrivalDelay(
+  arrival: SimNode['params']['arrival'],
+  random: SeededRandom
+): number {
+  if (arrival?.type === 'normal') {
+    return sampleDuration({
+      type: 'normal',
+      mean: arrival.mean ?? arrival.interval ?? 1,
+      stddev: arrival.stddev ?? 1,
+      min: arrival.min ?? 0,
+      max: arrival.max
+    }, random);
+  }
+
+  if (arrival?.type === 'exponential') {
+    return sampleDuration({
+      type: 'exponential',
+      mean: arrival.mean ?? arrival.interval ?? 1,
+      lambda: arrival.lambda
+    }, random);
+  }
+
+  return Math.max(0, arrival?.interval ?? arrival?.mean ?? 1);
+}
+
+function shiftMatchingWaitingToken(
+  waiting: ElementTokenPayload[],
+  delivery: EventDelivery
+): ElementTokenPayload | undefined {
+  const index = waiting.findIndex((payload) => deliveryMatchesCase(delivery, payload.token.caseId));
+
+  if (index < 0) {
+    return undefined;
+  }
+
+  return waiting.splice(index, 1)[0];
+}
+
+function shiftMatchingDelivery(
+  deliveries: EventDelivery[] | undefined,
+  targetCaseId: number
+): EventDelivery | undefined {
+  if (!deliveries?.length) {
+    return undefined;
+  }
+
+  const index = deliveries.findIndex((delivery) => deliveryMatchesCase(delivery, targetCaseId));
+
+  if (index < 0) {
+    return undefined;
+  }
+
+  return deliveries.splice(index, 1)[0];
+}
+
+function deliveryMatchesCase(delivery: EventDelivery, targetCaseId: number): boolean {
+  return delivery.correlationCaseId === undefined ||
+    delivery.correlationCaseId === targetCaseId ||
+    delivery.sourceCaseId === targetCaseId;
+}
+
+function messageFlowMatches(flow: SimMessageFlow, definition: SimEventDefinition, eventKey: string): boolean {
+  if (!flow.messageId && !flow.messageName) {
+    return true;
+  }
+
+  return eventDefinitionKeys(definition, eventKey).some((key) => {
+    return key === flow.messageId || key === flow.messageName;
+  });
+}
+
+function eventDefinitionKeys(definition: SimEventDefinition, eventKey: string): string[] {
+  return [eventKey, definition.name, definition.refId, definition.id]
+    .filter((key): key is string => Boolean(key));
+}
+
+function cloneVariables(
+  variables: Record<string, CaseOutputValue> | undefined
+): Record<string, CaseOutputValue> | undefined {
+  return variables
+    ? JSON.parse(JSON.stringify(variables)) as Record<string, CaseOutputValue>
+    : undefined;
+}
+
+function withParentCaseId(
+  variables: Record<string, CaseOutputValue> | undefined,
+  parentCaseId: number | undefined
+): Record<string, CaseOutputValue> | undefined {
+  if (parentCaseId === undefined) {
+    return variables;
+  }
+
+  return {
+    ...(cloneVariables(variables) ?? {}),
+    parentCaseId
+  };
 }

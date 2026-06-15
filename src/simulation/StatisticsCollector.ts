@@ -10,6 +10,7 @@ import type {
   SimulationLogEntry,
   SimulationResult
 } from '../types/simulation';
+import { workingTimeBetween } from './ResourceCalendar';
 
 export class StatisticsCollector {
   private readonly elementMetrics = new Map<string, ElementMetrics>();
@@ -22,7 +23,14 @@ export class StatisticsCollector {
     this.getElementMetrics(node).visits += 1;
   }
 
-  recordService(node: SimNode, waitTime: number, serviceTime: number): void {
+  recordService(
+    node: SimNode,
+    waitTime: number,
+    serviceTime: number,
+    startTime?: number,
+    endTime?: number,
+    countTask = true
+  ): void {
     const metrics = this.getElementMetrics(node);
     const wait = Math.max(0, waitTime);
     const service = Math.max(0, serviceTime);
@@ -36,11 +44,26 @@ export class StatisticsCollector {
     const resource = this.getResourceMetrics(node);
 
     if (resource) {
-      resource.taskCount += 1;
+      if (countTask) {
+        resource.taskCount += 1;
+      }
+
       resource.waitTime += wait;
       resource.waitTimeSamples?.push(wait);
       resource.serviceTime += service;
       resource.serviceTimeSamples?.push(service);
+
+      if (startTime !== undefined && Number.isFinite(startTime)) {
+        resource.firstTaskStartTime = resource.firstTaskStartTime === undefined
+          ? startTime
+          : Math.min(resource.firstTaskStartTime, startTime);
+      }
+
+      if (endTime !== undefined && Number.isFinite(endTime)) {
+        resource.lastTaskEndTime = resource.lastTaskEndTime === undefined
+          ? endTime
+          : Math.max(resource.lastTaskEndTime, endTime);
+      }
     }
   }
 
@@ -94,6 +117,8 @@ export class StatisticsCollector {
       elementId?: string;
       elementName?: string;
       caseId?: number;
+      sourceCaseId?: number;
+      attempt?: number;
       time?: number;
       level?: SimulationLogEntry['level'];
       resourceId?: string;
@@ -104,6 +129,8 @@ export class StatisticsCollector {
       level: options.level ?? 'info',
       eventType,
       caseId: options.caseId,
+      sourceCaseId: options.sourceCaseId,
+      attempt: options.attempt,
       message,
       elementId: options.elementId,
       elementName: options.elementName,
@@ -172,7 +199,8 @@ export class StatisticsCollector {
     const resourceMetrics = [...this.resourceMetrics.values()]
       .map((metric) => ({
         ...metric,
-        name: resourceNames.get(metric.resourceId) ?? metric.name
+        name: resourceNames.get(metric.resourceId) ?? metric.name,
+        utilization: calculateResourceUtilization(metric)
       }))
       .sort((a, b) => b.taskCount - a.taskCount);
     const flowMetrics = [...this.flowMetrics.values()].sort((a, b) => b.count - a.count);
@@ -274,7 +302,11 @@ export class StatisticsCollector {
       waitTime: 0,
       waitTimeSamples: [],
       serviceTime: 0,
-      serviceTimeSamples: []
+      serviceTimeSamples: [],
+      capacity: node.params.resource?.capacity,
+      weekdays: node.params.resource?.weekdays,
+      hourRanges: node.params.resource?.hourRanges,
+      utilization: 0
     };
 
     this.resourceMetrics.set(resourceId, metrics);
@@ -339,7 +371,8 @@ function createSimulationResultsCsv(result: ExportBase): string {
     metric.taskCount,
     metric.errors,
     metric.serviceTimeSamples ?? [],
-    metric.waitTimeSamples ?? []
+    metric.waitTimeSamples ?? [],
+    metric.utilization
   ));
   const processWaitSamples = result.elementMetrics
     .filter((metric) => isActivityMetric(metric.type))
@@ -361,7 +394,8 @@ function createSimulationResultsCsv(result: ExportBase): string {
       'Min Wartezeit',
       'Max Wartezeit',
       'Avg Wartezeit',
-      'Median Wartezeit'
+      'Median Wartezeit',
+      'Auslastung'
     ].map(csvCell).join(','),
     resultCsvLine(
       'Process',
@@ -370,7 +404,8 @@ function createSimulationResultsCsv(result: ExportBase): string {
       result.cases.length,
       result.failedCases,
       processServiceSamples,
-      processWaitSamples
+      processWaitSamples,
+      undefined
     ),
     ...taskRows,
     ...resourceRows
@@ -439,7 +474,8 @@ function resultCsvLine(
   executions: number,
   errors: number,
   serviceSamples: number[],
-  waitSamples: number[]
+  waitSamples: number[],
+  utilization?: number
 ): string {
   const service = sampleStats(serviceSamples);
   const wait = sampleStats(waitSamples);
@@ -457,7 +493,8 @@ function resultCsvLine(
     wait.min,
     wait.max,
     wait.avg,
-    wait.median
+    wait.median,
+    utilization === undefined ? '' : formatNumber(utilization)
   ].map(csvCell).join(',');
 }
 
@@ -582,6 +619,14 @@ function isActivityMetric(type: string): boolean {
 
 function isEventMetric(type: string): boolean {
   return /Event$/.test(type);
+}
+
+function calculateResourceUtilization(metric: ResourceMetrics): number {
+  const workingHours = workingTimeBetween(metric.firstTaskStartTime, metric.lastTaskEndTime, metric);
+  const capacity = Math.max(1, Math.floor(metric.capacity ?? 1));
+  const availableCapacityHours = workingHours * capacity;
+
+  return availableCapacityHours > 0 ? (metric.serviceTime / 60) / availableCapacityHours : 0;
 }
 
 function cloneVariables(
