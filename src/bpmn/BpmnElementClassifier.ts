@@ -45,6 +45,10 @@ export function classifyBpmnElement(element: BpmnBusinessObject): Classification
     return { kind: 'parallelGateway', supported: true };
   }
 
+  if (type === 'bpmn:EventBasedGateway') {
+    return { kind: 'eventBasedGateway', supported: true };
+  }
+
   if (type === 'bpmn:InclusiveGateway') {
     return {
       kind: 'inclusiveGateway',

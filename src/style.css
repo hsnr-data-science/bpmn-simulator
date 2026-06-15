@@ -685,19 +685,18 @@ select {
 }
 
 .des-node-tokens,
-.des-flow-tokens {
+.des-flow-tokens,
+.des-timeline-tokens {
   pointer-events: none;
 }
 
 .des-node-token circle {
-  fill: #10d070;
   stroke: #ffffff;
   stroke-width: 2;
   filter: drop-shadow(0 2px 5px rgb(14 66 54 / 35%));
 }
 
 .des-node-token text {
-  fill: #ffffff;
   font-size: 11px;
   font-weight: 700;
 }
@@ -709,9 +708,43 @@ select {
 }
 
 .des-flow-token text {
-  fill: #ffffff;
   font-size: 10px;
   font-weight: 700;
+}
+
+.des-token-waiting circle {
+  stroke: #b48916;
+  stroke-dasharray: 3 2;
+}
+
+.des-token-single circle {
+  fill: #bfe6ff;
+}
+
+.des-token-single text {
+  fill: #0f3b52;
+  font-size: 10px;
+}
+
+.des-token-aggregate circle {
+  fill: #c8f4d2;
+}
+
+.des-token-aggregate text {
+  fill: #12462a;
+}
+
+.des-warning-token rect {
+  fill: #c63f39;
+  stroke: #ffffff;
+  stroke-width: 2;
+  filter: drop-shadow(0 2px 5px rgb(80 20 18 / 30%));
+}
+
+.des-warning-token text {
+  fill: #ffffff;
+  font-size: 12px;
+  font-weight: 800;
 }
 
 .sim-duration-editor,

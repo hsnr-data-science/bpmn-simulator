@@ -11,6 +11,7 @@ import type {
   SimulationResult
 } from '../types/simulation';
 import { workingTimeBetween } from './ResourceCalendar';
+import { buildSimulationTimeline } from './SimulationTimelineBuilder';
 
 export class StatisticsCollector {
   private readonly elementMetrics = new Map<string, ElementMetrics>();
@@ -118,6 +119,7 @@ export class StatisticsCollector {
       elementName?: string;
       caseId?: number;
       sourceCaseId?: number;
+      tokenId?: string;
       attempt?: number;
       time?: number;
       level?: SimulationLogEntry['level'];
@@ -130,6 +132,7 @@ export class StatisticsCollector {
       eventType,
       caseId: options.caseId,
       sourceCaseId: options.sourceCaseId,
+      tokenId: options.tokenId,
       attempt: options.attempt,
       message,
       elementId: options.elementId,
@@ -215,6 +218,7 @@ export class StatisticsCollector {
         tokenCount: metric.visits
       };
     });
+    const timeline = buildSimulationTimeline(model, this.logEntries, cases);
 
     const baseResult = {
       startedAt,
@@ -233,6 +237,7 @@ export class StatisticsCollector {
       elementMetrics,
       resourceMetrics,
       flowMetrics,
+      timeline,
       log: this.logEntries,
       warnings,
       unsupportedElementIds: model.unsupportedElementIds,

@@ -1,6 +1,6 @@
 import BpmnModeler from 'bpmn-js/lib/Modeler';
 import { BpmnPropertiesPanelModule, BpmnPropertiesProviderModule } from 'bpmn-js-properties-panel';
-import { createIcons, Download, File, FilePlus, Play, Plus, RotateCcw, Square, Trash2, Upload } from 'lucide';
+import { createIcons, Download, File, FilePlus, Pause, Play, Plus, RotateCcw, Square, StepBack, StepForward, Trash2, Upload } from 'lucide';
 import { buildBpmnGraph } from '../bpmn/BpmnGraphBuilder';
 import { defaultDiagram } from '../bpmn/defaultDiagram';
 import { emptyDiagram } from '../bpmn/emptyDiagram';
@@ -58,6 +58,9 @@ type AppElements = {
   importDiagram: HTMLButtonElement;
   exportDiagram: HTMLButtonElement;
   runSimulation: HTMLButtonElement;
+  pauseSimulation: HTMLButtonElement;
+  stepBackSimulation: HTMLButtonElement;
+  stepForwardSimulation: HTMLButtonElement;
   stopSimulation: HTMLButtonElement;
   resetSimulation: HTMLButtonElement;
   addResource: HTMLButtonElement;
@@ -68,7 +71,6 @@ type AppElements = {
   leftResizer: HTMLElement;
   rightResizer: HTMLElement;
   fileInput: HTMLInputElement;
-  caseCount: HTMLInputElement;
   seed: HTMLInputElement;
   simulationStartTime: HTMLInputElement;
   simulationEndTime: HTMLInputElement;
@@ -208,7 +210,28 @@ export class ModelerApp {
     });
 
     this.elements.runSimulation.addEventListener('click', () => {
+      if (this.tokenAnimator.isRunning() && !this.tokenAnimator.isPlaying()) {
+        this.tokenAnimator.resume();
+        this.setStatus('Playback resumed');
+        return;
+      }
+
       void this.runSimulation();
+    });
+
+    this.elements.pauseSimulation.addEventListener('click', () => {
+      this.tokenAnimator.pause();
+      this.setStatus('Playback paused');
+    });
+
+    this.elements.stepBackSimulation.addEventListener('click', () => {
+      this.tokenAnimator.stepBackward();
+      this.setStatus('Playback stepped backward');
+    });
+
+    this.elements.stepForwardSimulation.addEventListener('click', () => {
+      this.tokenAnimator.stepForward();
+      this.setStatus('Playback stepped forward');
     });
 
     this.elements.stopSimulation.addEventListener('click', () => {
@@ -357,12 +380,11 @@ export class ModelerApp {
       const maxSimulationTime = simulationEnd && simulationEnd.getTime() > simulationStart.getTime()
         ? startTime + hoursBetween(simulationStart, simulationEnd)
         : undefined;
-      const numberOfRuns = readInteger(this.elements.caseCount, 250);
 
       this.updateCurrentSimulationTime();
 
       const result = this.runner.run(simModel, {
-        numberOfRuns,
+        numberOfRuns: 1,
         randomSeed: readInteger(this.elements.seed, 42),
         maxSimulationTime,
         startTime,
@@ -766,6 +788,9 @@ export class ModelerApp {
       importDiagram: getElement('import-diagram'),
       exportDiagram: getElement('export-diagram'),
       runSimulation: getElement('run-simulation'),
+      pauseSimulation: getElement('pause-simulation'),
+      stepBackSimulation: getElement('step-back-simulation'),
+      stepForwardSimulation: getElement('step-forward-simulation'),
       stopSimulation: getElement('stop-simulation'),
       resetSimulation: getElement('reset-simulation'),
       addResource: getElement('add-resource'),
@@ -776,7 +801,6 @@ export class ModelerApp {
       leftResizer: getElement('left-sidebar-resizer'),
       rightResizer: getElement('right-sidebar-resizer'),
       fileInput: getElement('file-input'),
-      caseCount: getElement('case-count'),
       seed: getElement('seed'),
       simulationStartTime: getElement('simulation-start-time'),
       simulationEndTime: getElement('simulation-end-time'),
@@ -885,10 +909,6 @@ function createShellMarkup(): string {
         </div>
         <div class="toolbar-group run-controls">
           <label>
-            <span>Cases</span>
-            <input id="case-count" type="number" min="1" max="50000" step="1" value="250" />
-          </label>
-          <label>
             <span>Seed</span>
             <input id="seed" type="number" min="1" step="1" value="42" />
           </label>
@@ -907,6 +927,15 @@ function createShellMarkup(): string {
           <button id="run-simulation" class="primary-button">
             <i data-lucide="play"></i>
             <span>Start</span>
+          </button>
+          <button id="pause-simulation" class="icon-button" title="Pause" aria-label="Pause">
+            <i data-lucide="pause"></i>
+          </button>
+          <button id="step-back-simulation" class="icon-button" title="Step backward" aria-label="Step backward">
+            <i data-lucide="step-back"></i>
+          </button>
+          <button id="step-forward-simulation" class="icon-button" title="Step forward" aria-label="Step forward">
+            <i data-lucide="step-forward"></i>
           </button>
           <button id="stop-simulation" class="icon-button" title="Stop" aria-label="Stop">
             <i data-lucide="square"></i>
@@ -1056,10 +1085,13 @@ function createAppIcons(): void {
       Download,
       File,
       FilePlus,
+      Pause,
       Play,
       Plus,
       RotateCcw,
       Square,
+      StepBack,
+      StepForward,
       Trash2,
       Upload
     }

@@ -44,6 +44,10 @@ export class BpmnSimulationInterpreter {
     return node.kind === 'parallelGateway' && node.incoming.length > 1;
   }
 
+  isEventBasedGateway(node: SimNode): boolean {
+    return node.kind === 'eventBasedGateway';
+  }
+
   isTimer(node: SimNode): boolean {
     return node.kind === 'timerIntermediateEvent';
   }

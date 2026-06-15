@@ -14,7 +14,8 @@ test('BPMN graph builder reads collaborations with multiple processes and messag
 
   assert.equal(model.processes?.size, 2);
   assert.equal(model.messageFlows?.length, 2);
-  assert.deepEqual(new Set(model.startNodeIds), new Set(['StartEvent_Order', 'Event_0rwco36', 'Event_179da30']));
+  assert.deepEqual(new Set(model.startNodeIds), new Set(['StartEvent_Order', 'Event_179da30']));
+  assert.equal(model.nodes.get('Gateway_1r2so5n')?.kind, 'eventBasedGateway');
   assert.equal(model.nodes.get('Event_041oh80')?.eventDefinitions?.[0]?.name, 'ordermsg2');
   assert.equal(model.nodes.get('Event_1vd2smq')?.eventDefinitions?.[0]?.name, 'shipmsg2');
   assert.equal(model.nodes.get('Event_179da30')?.params.arrival?.type, 'none');
@@ -62,7 +63,7 @@ test('DES delivers messages across pools and resumes a waiting catch event', asy
   }
 });
 
-test('DES broadcasts signals and starts matching signal start events', async () => {
+test('DES lets a signal win an event-based gateway race in the parent case', async () => {
   const model = await loadMessagingModel();
 
   makeMessagingModelDeterministic(model);
@@ -74,18 +75,21 @@ test('DES broadcasts signals and starts matching signal start events', async () 
     animationSpeed: 1,
     collectTraces: true
   }).run();
-  const signalCases = result.cases.filter((caseTrace) => {
-    return caseTrace.processId === 'Process_Order_Fulfillment' &&
-      caseTrace.trigger === 'signal' &&
-      caseTrace.triggerEventKey === 'cancelorder';
+  const parentCases = result.cases.filter((caseTrace) => {
+    return caseTrace.processId === 'Process_Order_Fulfillment' && caseTrace.trigger === 'arrival';
   });
   const receivedReplies = result.log.filter((entry) => {
     return entry.eventType === 'MESSAGE_RECEIVED' && entry.elementId === 'Event_1vd2smq';
   });
+  const signalContinues = result.log.filter((entry) => {
+    return entry.eventType === 'SIGNAL_RECEIVED' && entry.elementId === 'Event_0rwco36';
+  });
 
-  assert.equal(signalCases.length, 10);
+  assert.equal(parentCases.length, 10);
+  assert.equal(signalContinues.length, 10);
   assert.equal(receivedReplies.length, 0);
-  assert.ok(result.deadlockSuspicions > 0);
+  assert.equal(result.completedCases, 20);
+  assert.equal(result.deadlockSuspicions, 0);
 });
 
 test('DES can start event-based processes from stochastic external events', () => {

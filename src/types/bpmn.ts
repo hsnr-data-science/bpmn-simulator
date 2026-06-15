@@ -55,6 +55,7 @@ export type FlowNodeKind =
   | 'userTask'
   | 'exclusiveGateway'
   | 'parallelGateway'
+  | 'eventBasedGateway'
   | 'sequenceFlow'
   | 'subProcess'
   | 'timerIntermediateEvent'

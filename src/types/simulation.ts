@@ -1,3 +1,5 @@
+import type { SimulationEvent as TimelineSimulationEvent } from './timeline';
+
 export type DurationDistributionType = 'fixed' | 'uniform' | 'normal' | 'exponential' | 'triangular';
 
 export type ArrivalDistributionType = 'none' | 'fixed' | 'normal' | 'exponential';
@@ -245,6 +247,7 @@ export type SimulationLogEntry = {
   eventType?: SimulationEventType;
   caseId?: number;
   sourceCaseId?: number;
+  tokenId?: string;
   attempt?: number;
   message: string;
   elementId?: string;
@@ -294,6 +297,7 @@ export type SimulationResult = {
   elementMetrics: ElementMetrics[];
   resourceMetrics: ResourceMetrics[];
   flowMetrics: FlowMetrics[];
+  timeline: TimelineSimulationEvent[];
   log: SimulationLogEntry[];
   warnings: string[];
   unsupportedElementIds: string[];

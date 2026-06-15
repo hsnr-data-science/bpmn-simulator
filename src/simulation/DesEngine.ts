@@ -38,6 +38,9 @@ type TokenPayload = {
 
 type ElementTokenPayload = TokenPayload & {
   elementId: string;
+  eventBasedGatewayRaceId?: string;
+  gatewayId?: string;
+  incomingFlowId?: string;
 };
 
 type TaskStartPayload = ElementTokenPayload & {
@@ -68,6 +71,13 @@ type EventDelivery = {
   variables?: Record<string, CaseOutputValue>;
 };
 
+type EventBasedGatewayRace = {
+  id: string;
+  caseId: number;
+  gatewayId: string;
+  active: boolean;
+};
+
 type TaskFailureOutcome =
   | 'retry'
   | {
@@ -89,6 +99,7 @@ export class DesEngine {
   private readonly waitingEventTokens = new Map<string, ElementTokenPayload[]>();
   private readonly pendingMessagesByTarget = new Map<string, EventDelivery[]>();
   private readonly pendingMessagesByKey = new Map<string, EventDelivery[]>();
+  private readonly eventBasedGatewayRaces = new Map<string, EventBasedGatewayRace>();
   private nextCaseId = 1;
 
   constructor(model: SimModel, options: SimulationConfig) {
@@ -145,6 +156,10 @@ export class DesEngine {
   }
 
   private dispatch(event: SimulationEvent): void {
+    if (this.isInactiveEventBasedGatewayEvent(event)) {
+      return;
+    }
+
     this.recordEvent(event);
 
     switch (event.type) {
@@ -164,7 +179,7 @@ export class DesEngine {
         this.completeTask(event.payload as TaskCompletePayload, event.time);
         break;
       case 'TIMER_FIRED':
-        this.leaveElement(event.payload as ElementTokenPayload, event.time);
+        this.fireTimer(event.payload as ElementTokenPayload, event.time);
         break;
       case 'TOKEN_LEAVE_ELEMENT':
         this.leaveElement(event.payload as ElementTokenPayload, event.time);
@@ -185,6 +200,12 @@ export class DesEngine {
         this.receiveSignal(event.payload as EventReceivedPayload, event.time);
         break;
     }
+  }
+
+  private isInactiveEventBasedGatewayEvent(event: SimulationEvent): boolean {
+    const raceId = (event.payload as Partial<ElementTokenPayload> | undefined)?.eventBasedGatewayRaceId;
+
+    return Boolean(raceId && !this.eventBasedGatewayRaces.get(raceId)?.active);
   }
 
   private scheduleCaseArrivals(): void {
@@ -409,6 +430,11 @@ export class DesEngine {
       return;
     }
 
+    if (this.interpreter.isEventBasedGateway(node)) {
+      this.enterEventBasedGateway(token, node, time);
+      return;
+    }
+
     const subProcessStartIds = this.interpreter.getSubProcessStarts(node);
 
     if (subProcessStartIds.length) {
@@ -493,6 +519,97 @@ export class DesEngine {
     caseState.joinCounts.set(node.id, 0);
     this.routeOutgoing(token, node, time);
     this.tokens.consume(token.caseId, time, required);
+  }
+
+  private enterEventBasedGateway(token: Token, gateway: SimNode, time: number): void {
+    const raceId = `${token.id}:${gateway.id}:${time}`;
+    let candidates = 0;
+
+    this.eventBasedGatewayRaces.set(raceId, {
+      id: raceId,
+      caseId: token.caseId,
+      gatewayId: gateway.id,
+      active: true
+    });
+
+    for (const flowId of gateway.outgoing) {
+      const flow = this.interpreter.getFlow(flowId);
+      const target = flow ? this.interpreter.getNode(flow.targetId) : undefined;
+
+      if (!flow || !target) {
+        continue;
+      }
+
+      const candidatePayload: ElementTokenPayload = {
+        token: {
+          ...token,
+          elementId: target.id
+        },
+        elementId: target.id,
+        eventBasedGatewayRaceId: raceId,
+        gatewayId: gateway.id,
+        incomingFlowId: flow.id
+      };
+
+      if (this.interpreter.isCatchingMessageOrSignalEvent(target)) {
+        this.waitForEventBasedMessageOrSignal(candidatePayload, target, time);
+        candidates += 1;
+        continue;
+      }
+
+      if (this.interpreter.isTimer(target)) {
+        this.queue.schedule('TIMER_FIRED', time + minutesToHours(sampleDuration(target.params.duration, this.random)), candidatePayload);
+        candidates += 1;
+        continue;
+      }
+
+      this.statistics.warn(
+        `Event-Based Gateway "${gateway.name}" ignoriert ausgehenden Flow "${flow.name}", weil das Ziel "${target.name}" kein Catch Event oder Timer Event ist.`,
+        gateway.id,
+        time
+      );
+    }
+
+    if (!candidates) {
+      this.statistics.warn(
+        `Event-Based Gateway "${gateway.name}" hat keine unterstuetzten ausgehenden Event-Kandidaten. Case ${token.caseId} endet dort.`,
+        gateway.id,
+        time
+      );
+      this.eventBasedGatewayRaces.delete(raceId);
+      this.tokens.consume(token.caseId, time);
+      return;
+    }
+
+    this.statistics.info(
+      `Case ${token.caseId} wartet an Event-Based Gateway "${gateway.name}" auf das naechste passende Event.`,
+      gateway.id,
+      time
+    );
+  }
+
+  private waitForEventBasedMessageOrSignal(payload: ElementTokenPayload, node: SimNode, time: number): void {
+    const messageDefinition = this.interpreter.getEventDefinitions(node, 'message')[0];
+
+    if (messageDefinition) {
+      const eventKey = this.interpreter.getEventKey(messageDefinition);
+      const delivery = this.shiftPendingMessage(node.id, eventKey, payload.token.caseId);
+
+      if (delivery) {
+        this.scheduleEventReceived('MESSAGE_RECEIVED', payload.token, node, delivery, time, payload);
+        return;
+      }
+
+      this.enqueueWaitingToken(node.id, payload);
+      return;
+    }
+
+    const signalDefinition = this.interpreter.getEventDefinitions(node, 'signal')[0];
+
+    if (signalDefinition) {
+      this.enqueueWaitingToken(node.id, payload);
+      return;
+    }
   }
 
   private startTask(payload: TaskStartPayload, time: number): void {
@@ -651,13 +768,82 @@ export class DesEngine {
   }
 
   private receiveMessage(payload: EventReceivedPayload, time: number): void {
+    if (!this.triggerEventBasedGatewayRace(payload, time)) {
+      return;
+    }
+
     this.tokens.mergeOutputs(payload.token.caseId, payload.variables);
     this.leaveElement(payload, time);
   }
 
   private receiveSignal(payload: EventReceivedPayload, time: number): void {
+    if (!this.triggerEventBasedGatewayRace(payload, time)) {
+      return;
+    }
+
     this.tokens.mergeOutputs(payload.token.caseId, payload.variables);
     this.leaveElement(payload, time);
+  }
+
+  private fireTimer(payload: ElementTokenPayload, time: number): void {
+    if (!this.triggerEventBasedGatewayRace(payload, time)) {
+      return;
+    }
+
+    this.leaveElement(payload, time);
+  }
+
+  private triggerEventBasedGatewayRace(payload: ElementTokenPayload, time: number): boolean {
+    const raceId = payload.eventBasedGatewayRaceId;
+
+    if (!raceId) {
+      return true;
+    }
+
+    const race = this.eventBasedGatewayRaces.get(raceId);
+
+    if (!race?.active) {
+      return false;
+    }
+
+    race.active = false;
+    this.cancelEventBasedGatewayAlternatives(raceId);
+    this.recordEventBasedGatewayWinner(payload, time);
+
+    return true;
+  }
+
+  private recordEventBasedGatewayWinner(payload: ElementTokenPayload, time: number): void {
+    const node = this.interpreter.getNode(payload.elementId);
+    const flow = payload.incomingFlowId ? this.interpreter.getFlow(payload.incomingFlowId) : undefined;
+
+    if (flow) {
+      this.tokens.recordPath(payload.token.caseId, flow.id, this.options.collectTraces);
+      this.statistics.recordFlow(flow);
+    }
+
+    if (node) {
+      this.tokens.recordPath(payload.token.caseId, node.id, this.options.collectTraces);
+      this.statistics.recordVisit(node);
+    }
+
+    this.statistics.info(
+      `Event-Based Gateway "${payload.gatewayId ?? 'unknown'}" setzt Case ${payload.token.caseId} ueber "${node?.name ?? payload.elementId}" fort.`,
+      payload.gatewayId ?? payload.elementId,
+      time
+    );
+  }
+
+  private cancelEventBasedGatewayAlternatives(raceId: string): void {
+    for (const [elementId, waiting] of this.waitingEventTokens.entries()) {
+      const remaining = waiting.filter((payload) => payload.eventBasedGatewayRaceId !== raceId);
+
+      if (remaining.length) {
+        this.waitingEventTokens.set(elementId, remaining);
+      } else {
+        this.waitingEventTokens.delete(elementId);
+      }
+    }
   }
 
   private publishMessageAndSignalEvents(node: SimNode, token: Token, time: number): void {
@@ -731,7 +917,7 @@ export class DesEngine {
           break;
         }
 
-        this.scheduleEventReceived('SIGNAL_RECEIVED', waitingToken.token, catchNode, delivery, time);
+        this.scheduleEventReceived('SIGNAL_RECEIVED', waitingToken.token, catchNode, delivery, time, waitingToken);
         delivered += 1;
       }
 
@@ -778,7 +964,7 @@ export class DesEngine {
       this.waitingEventTokens.set(targetNode.id, waiting);
 
       if (waitingPayload) {
-        this.scheduleEventReceived('MESSAGE_RECEIVED', waitingPayload.token, targetNode, delivery, time);
+        this.scheduleEventReceived('MESSAGE_RECEIVED', waitingPayload.token, targetNode, delivery, time, waitingPayload);
         return true;
       }
 
@@ -818,7 +1004,7 @@ export class DesEngine {
       this.waitingEventTokens.set(catchNode.id, waiting);
 
       if (waitingPayload) {
-        this.scheduleEventReceived('MESSAGE_RECEIVED', waitingPayload.token, catchNode, delivery, time);
+        this.scheduleEventReceived('MESSAGE_RECEIVED', waitingPayload.token, catchNode, delivery, time, waitingPayload);
         return true;
       }
     }
@@ -836,14 +1022,18 @@ export class DesEngine {
     token: Token,
     node: SimNode,
     delivery: EventDelivery,
-    time: number
+    time: number,
+    eventBasedPayload?: ElementTokenPayload
   ): void {
     this.queue.schedule(type, time, {
       token,
       elementId: node.id,
       eventKey: delivery.eventKey,
       sourceCaseId: delivery.sourceCaseId,
-      variables: delivery.variables
+      variables: delivery.variables,
+      eventBasedGatewayRaceId: eventBasedPayload?.eventBasedGatewayRaceId,
+      gatewayId: eventBasedPayload?.gatewayId,
+      incomingFlowId: eventBasedPayload?.incomingFlowId
     });
   }
 
@@ -1104,6 +1294,7 @@ export class DesEngine {
       time: event.time,
       caseId,
       sourceCaseId: payload.sourceCaseId,
+      tokenId: token?.id,
       attempt: token?.attempt,
       elementId,
       elementName: node?.name,

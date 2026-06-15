@@ -34,6 +34,12 @@ src/
     StatisticsCollector.ts
     RandomDistributions.ts
     BpmnSimulationInterpreter.ts
+    SimulationTimelineBuilder.ts
+  playback/
+    TimelineFrameBuilder.ts
+    PlaybackController.ts
+    VisualStateStore.ts
+    EventLogImporter.ts
   bpmn/
     BpmnGraphBuilder.ts
     BpmnElementClassifier.ts
@@ -51,10 +57,12 @@ src/
   visualization/
     TokenOverlayManager.ts
     HeatmapOverlayManager.ts
+    TimelineOverlayRenderer.ts
     SimulationLogPanel.ts
   types/
     simulation.ts
     bpmn.ts
+    timeline.ts
 ```
 
 ## Simulationsparameter
@@ -143,7 +151,25 @@ TASK_FAILED
 RETRY_TASK
 ```
 
-`SimulationConfig` enthält `numberOfRuns`, optionales `maxSimulationTime`, `startTime`, `startDateTime`, `endDateTime`, `randomSeed`, `animationSpeed` und `collectTraces`. Die UI berechnet den optionalen Zeithorizont aus der eingestellten Endzeit; eine leere Endzeit bedeutet unbegrenzt.
+`SimulationConfig` enthält `numberOfRuns`, optionales `maxSimulationTime`, `startTime`, `startDateTime`, `endDateTime`, `randomSeed`, `animationSpeed` und `collectTraces`. In der UI gibt es keine globale Case-Anzahl mehr; die Anzahl der Prozessinstanzen wird pro Start Event über dessen `numberOfCases` gepflegt. Die UI berechnet den optionalen Zeithorizont aus der eingestellten Endzeit; eine leere Endzeit bedeutet unbegrenzt.
+
+## Timeline Playback
+
+Die DES-Engine steuert keine Visualisierung direkt an. Sie erzeugt nach dem Lauf ein geordnetes Event Log als `SimulationEvent[]`, das im JSON-Export unter `timeline` enthalten ist. Die Animation darf die Simulation nicht treiben. Die Simulationstimeline muss die Animation treiben.
+
+Der Datenfluss ist:
+
+```text
+Simulation -> SimulationEvent Timeline -> TimelineFrame[] -> PlaybackController -> VisualState -> bpmn-js Overlay Rendering
+```
+
+`SimulationEvent` ist die zentrale Schnittstelle zwischen DES und Playback. Es enthält Simulationszeit, stabile Sequenznummer, Prozessinstanz, optionale Token-ID, BPMN-Elemente und Payload. Fachliche DES-Events wie `TASK_STARTED`, `TASK_COMPLETED`, `GATEWAY_DECISION` oder `PROCESS_INSTANCE_COMPLETED` werden zusammen mit rein visuellen Bewegungsereignissen `TOKEN_MOVE_START` und `TOKEN_MOVE_END` in derselben Timeline abgelegt. Diese Bewegungsereignisse verbrauchen keine fachliche Prozesszeit; sie dienen nur dem Playback.
+
+`TimelineFrameBuilder` sortiert die Events nach `simulationTime` und `sequence` und gruppiert alle Events mit gleicher Simulationszeit zu atomaren Frames. Dadurch starten parallele Tokenbewegungen, etwa nach einem Parallel Gateway, im selben Visualisierungsschritt synchron.
+
+`PlaybackController` besitzt die einzige Playback-Uhr. Play, Pause, Step, Seek und Speed ändern nur diese Uhr. Tokens werden nicht mehr mit eigenen `setTimeout`-Ketten, Promises oder CSS-Transitionen animiert.
+
+`VisualStateStore` rekonstruiert den aktuellen Zustand deterministisch aus Event Log und Playback-Zeit: sichtbare Tokens, aktive Elemente, abgeschlossene Elemente, wartende Tokens und Warnungen. `TimelineOverlayRenderer` rendert diesen Zustand idempotent als bpmn-js/SVG-Overlay. Ein importiertes Event Log kann über `EventLogImporter` validiert und mit demselben FrameBuilder und PlaybackController abgespielt werden.
 
 ## BPMN-Unterstützung
 
@@ -154,6 +180,7 @@ MVP-Unterstützung:
 - Task, User Task, Service Task
 - Exclusive Gateway
 - Parallel Gateway
+- Event-Based Gateway mit konkurrierenden Message-, Signal- und Timer-Catch-Events
 - Sequence Flow
 - einfache Subprozesse als Container mit Start-/End-Logik
 - Timer Intermediate Events als Verzögerung
@@ -171,7 +198,7 @@ Vorbereitet, aber noch nicht vollständig implementiert:
 
 Nicht unterstützte Elemente brechen die Simulation nicht ab. Sie erzeugen eine Warnung im Log Panel und werden im Diagramm markiert.
 
-Message-Flows in einer Collaboration werden als gezielte Zustellung zwischen Prozessinstanzen interpretiert. Message Start Events erzeugen neue Prozessinstanzen nur durch passende Messages, Message Catch Events warten auf passende Messages; noch nicht konsumierte Messages werden für spätere Catch Events gepuffert. Child-Prozesse erhalten die `parentCaseId` als Prozessvariable. Signals werden als Broadcast behandelt und starten alle passenden Signal Start Events bzw. wecken passende wartende Signal Catch Events. Zufällige externe Ereignisse werden über nicht korrelierte Start Events mit Arrival-Konfiguration modelliert, nicht über Message-/Signal-Start-Events.
+Message-Flows in einer Collaboration werden als gezielte Zustellung zwischen Prozessinstanzen interpretiert. Message Start Events erzeugen neue Prozessinstanzen nur durch passende Messages, Message Catch Events warten auf passende Messages; noch nicht konsumierte Messages werden für spätere Catch Events gepuffert. Child-Prozesse erhalten die `parentCaseId` als Prozessvariable. Signals werden als Broadcast behandelt und starten alle passenden Signal Start Events bzw. wecken passende wartende Signal Catch Events. Event-Based Gateways registrieren ihre ausgehenden Message-, Signal- und Timer-Catch-Events als konkurrierende Race; das erste eintretende Event setzt den Case fort und storniert die übrigen Alternativen. Zufällige externe Ereignisse werden über nicht korrelierte Start Events mit Arrival-Konfiguration modelliert, nicht über Message-/Signal-Start-Events.
 
 ## XOR-Logik
 
@@ -184,15 +211,15 @@ Wenn keine Bedingungen vorhanden sind, nutzt der Interpreter `branchProbability`
 Die Oberfläche enthält:
 
 - BPMN Modeler mit Properties Panel
-- Simulation Control Panel mit Start, Stop und Reset
-- Einstellungen für Anzahl Cases, Seed, Startzeit, optionale Endzeit, aktuelle Simulationszeit und Animationsgeschwindigkeit
-- logarithmischen Speed-Regler mit den Stufen `1`, `10`, `100`, `1000` und `10000`
+- Simulation Control Panel mit Start, Pause, Step backward, Step forward, Stop und Reset
+- Einstellungen für Seed, Startzeit, optionale Endzeit, aktuelle Simulationszeit und Animationsgeschwindigkeit
+- Speed-Regler mit den Stufen `1x`, `2x`, `4x`, `8x` und `16x`; `1x` nutzt eine stark verlangsamte Playback-Basis von einem Hundertstel der urspruenglichen Geschwindigkeit
 - Ressourcenbereich zum Bearbeiten von ID, Name, Kapazität, Wochentagen und stundenweisen Arbeitszeitbereichen
 - einklappbare linke Sidebar-Bereiche fuer Übersicht, Ressourcen, Bottlenecks, Pfade, Statistik, Event Log, Warnungen und Export
 - größenänderbare linke und rechte Sidebar
 - Ergebnisbereich mit Statistik-Tabelle, Event Log, Warnungen und Export Buttons
 
-Wenn der bpmn-js-token-simulation-Schalter auf AN steht, spielt der obere Start-Button den DES-Lauf als Token-Animation im Diagramm ab. Der urspruengliche interaktive Simulator aus bpmn-js-token-simulation wird nicht geladen; dessen Event-Trigger, Task-Pausen, Gateway-Umschaltungen, Reset/Pause-Controls und Event-Log sind entfernt. Waehrend des Abspielens aktualisieren sich Statistik, Task-Wartezeitboxen, Task-Fehlerzaehler, Event-/Gateway-Haeufigkeiten, Aktivitaetsfarben und Kantenstaerken fortlaufend.
+Wenn der bpmn-js-token-simulation-Schalter auf AN steht, erzeugt der obere Start-Button zuerst den vollständigen DES-Lauf und spielt danach dessen Timeline über den zentralen PlaybackController im Diagramm ab. Der urspruengliche interaktive Simulator aus bpmn-js-token-simulation wird nicht geladen; dessen Event-Trigger, Task-Pausen, Gateway-Umschaltungen, Reset/Pause-Controls und Event-Log sind entfernt. Waehrend des Abspielens aktualisieren sich Statistik, Task-Wartezeitboxen, Task-Fehlerzaehler, Event-/Gateway-Haeufigkeiten, Aktivitaetsfarben und Kantenstaerken fortlaufend.
 
 ## Statistik und Export
 
