@@ -1,0 +1,31 @@
+import insuranceClaimsDiagram from '../../tests/bpmn/InsuranceClaimsSimulationNormalSeason.bpmn?raw';
+import messagingDiagram from '../../tests/bpmn/messaging.bpmn?raw';
+import simpleOrderDiagram from '../../tests/bpmn/simple-order-fullfillment-des-demo.bpmn?raw';
+
+export type DemoModel = {
+  id: string;
+  name: string;
+  xml: string;
+};
+
+export const DEMO_MODELS: DemoModel[] = [
+  {
+    id: 'simple-order',
+    name: 'Simple Order Fulfillment',
+    xml: simpleOrderDiagram
+  },
+  {
+    id: 'messaging',
+    name: 'Messaging and Signals',
+    xml: messagingDiagram
+  },
+  {
+    id: 'insurance-claims',
+    name: 'Insurance Claims (QBP Import)',
+    xml: insuranceClaimsDiagram
+  }
+];
+
+export function getDemoModel(id: string | undefined): DemoModel {
+  return DEMO_MODELS.find((model) => model.id === id) ?? DEMO_MODELS[0];
+}
