@@ -36,6 +36,10 @@ test('TimelineOverlayRenderer renders idempotently and clears overlays', () => {
         return { id: 'flow', waypoints: [{ x: 150, y: 140 }, { x: 260, y: 140 }] };
       }
 
+      if (elementId === 'next') {
+        return { id: 'next', x: 260, y: 220, width: 100, height: 80 };
+      }
+
       return undefined;
     }
   };
@@ -87,6 +91,12 @@ test('TimelineOverlayRenderer renders idempotently and clears overlays', () => {
           endTime: 2,
           progress: 0.5
         }
+      },
+      {
+        tokenId: 't5',
+        processInstanceId: 'case-1',
+        elementId: 'next',
+        status: 'active'
       }
     ]
   };
@@ -101,6 +111,7 @@ test('TimelineOverlayRenderer renders idempotently and clears overlays', () => {
   assert.ok(layer.children[0].attributes.get('class')?.includes('des-token-single'));
   assert.equal(layer.children[1].children[1].textContent, '2');
   assert.ok(layer.children[1].attributes.get('class')?.includes('des-token-aggregate'));
+  assert.ok(!layer.children.some((child) => child.dataset.tokenIds?.includes('t5')));
   assert.ok(markers.get('task')?.has('des-token-current'));
   assert.ok(markers.get('flow')?.has('des-active-path'));
 

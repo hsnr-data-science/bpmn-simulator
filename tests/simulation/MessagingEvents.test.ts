@@ -3,6 +3,8 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import type { BpmnDefinitions, SimFlow, SimModel, SimNode } from '../../src/types/bpmn';
 import { buildBpmnGraph } from '../../src/bpmn/BpmnGraphBuilder';
+import { TimelineFrameBuilder } from '../../src/playback/TimelineFrameBuilder';
+import { VisualStateStore } from '../../src/playback/VisualStateStore';
 import { DesEngine } from '../../src/simulation/DesEngine';
 
 type BpmnModdleCtor = new () => {
@@ -63,6 +65,53 @@ test('DES delivers messages across pools and resumes a waiting catch event', asy
   }
 });
 
+test('Messaging playback waits at the event-based gateway and clears the winning catch event', async () => {
+  const model = await loadMessagingModel();
+
+  makeMessagingModelDeterministic(model);
+  forceExclusivePath(model, 'Flow_1n6mqny', ['Flow_0jb5mwb', 'Flow_1om6y6c']);
+  const start = model.nodes.get('StartEvent_Order');
+
+  if (!start?.params.arrival) {
+    throw new Error('Messaging start event arrival config missing');
+  }
+
+  start.params.arrival.numberOfCases = 1;
+
+  const result = new DesEngine(model, {
+    numberOfRuns: 1,
+    randomSeed: 7,
+    animationSpeed: 1,
+    collectTraces: true
+  }).run();
+  const messageReceived = result.log.find((entry) => {
+    return entry.eventType === 'MESSAGE_RECEIVED' && entry.elementId === 'Event_1vd2smq';
+  });
+  const catchLeave = result.log.find((entry) => {
+    return entry.eventType === 'TOKEN_LEAVE_ELEMENT' &&
+      entry.elementId === 'Event_1vd2smq' &&
+      entry.caseId === messageReceived?.caseId;
+  });
+  const gatewayMovement = result.timeline.find((event) => {
+    return event.type === 'TOKEN_MOVE_START' && event.sequenceFlowId === 'Flow_01eymnt';
+  });
+  const senderArrival = result.timeline.find((event) => {
+    return event.type === 'TOKEN_MOVE_END' && event.sequenceFlowId === 'Flow_1n6mqny';
+  });
+  const finalFrameTime = result.timeline.at(-1)?.simulationTime ?? 0;
+  const finalState = new VisualStateStore(
+    new TimelineFrameBuilder().buildFrames(result.timeline)
+  ).rebuildUntil(finalFrameTime);
+
+  assert.ok(messageReceived?.time !== undefined);
+  assert.equal(catchLeave?.time, messageReceived.time);
+  assert.ok(senderArrival);
+  assert.ok((gatewayMovement?.simulationTime ?? 0) >= senderArrival.simulationTime);
+  assert.ok(!finalState.tokens.some((token) => {
+    return token.elementId === 'Event_1vd2smq' || token.elementId === 'Event_0rwco36';
+  }));
+});
+
 test('DES lets a signal win an event-based gateway race in the parent case', async () => {
   const model = await loadMessagingModel();
 
@@ -84,12 +133,25 @@ test('DES lets a signal win an event-based gateway race in the parent case', asy
   const signalContinues = result.log.filter((entry) => {
     return entry.eventType === 'SIGNAL_RECEIVED' && entry.elementId === 'Event_0rwco36';
   });
+  const senderArrival = result.timeline.find((event) => {
+    return event.type === 'TOKEN_MOVE_END' && event.sequenceFlowId === 'Flow_0jb5mwb';
+  });
+  const gatewayMovement = result.timeline.find((event) => {
+    return event.type === 'TOKEN_MOVE_START' && event.sequenceFlowId === 'Flow_0exe2s5';
+  });
+  const finalFrameTime = result.timeline.at(-1)?.simulationTime ?? 0;
+  const finalState = new VisualStateStore(
+    new TimelineFrameBuilder().buildFrames(result.timeline)
+  ).rebuildUntil(finalFrameTime);
 
   assert.equal(parentCases.length, 10);
   assert.equal(signalContinues.length, 10);
   assert.equal(receivedReplies.length, 0);
   assert.equal(result.completedCases, 20);
   assert.equal(result.deadlockSuspicions, 0);
+  assert.ok(senderArrival);
+  assert.ok((gatewayMovement?.simulationTime ?? 0) >= senderArrival.simulationTime);
+  assert.ok(!finalState.tokens.some((token) => token.elementId === 'Event_0rwco36'));
 });
 
 test('DES can start event-based processes from stochastic external events', () => {

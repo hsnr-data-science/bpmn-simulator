@@ -247,12 +247,14 @@ export type SimulationLogEntry = {
   eventType?: SimulationEventType;
   caseId?: number;
   sourceCaseId?: number;
+  sourceElementId?: string;
   tokenId?: string;
   attempt?: number;
   message: string;
   elementId?: string;
   elementName?: string;
   resourceId?: string;
+  serviceTime?: number;
   variables?: Record<string, CaseOutputValue>;
   time?: number;
 };

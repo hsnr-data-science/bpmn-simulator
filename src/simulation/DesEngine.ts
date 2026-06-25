@@ -60,6 +60,7 @@ type TaskFailedPayload = ElementTokenPayload & {
 type EventReceivedPayload = ElementTokenPayload & {
   eventKey?: string;
   sourceCaseId?: number;
+  sourceElementId?: string;
   variables?: Record<string, CaseOutputValue>;
 };
 
@@ -160,7 +161,9 @@ export class DesEngine {
       return;
     }
 
-    this.recordEvent(event);
+    if (event.type !== 'TASK_START') {
+      this.recordEvent(event);
+    }
 
     switch (event.type) {
       case 'CASE_ARRIVAL':
@@ -203,6 +206,14 @@ export class DesEngine {
   }
 
   private isInactiveEventBasedGatewayEvent(event: SimulationEvent): boolean {
+    if (
+      event.type !== 'MESSAGE_RECEIVED' &&
+      event.type !== 'SIGNAL_RECEIVED' &&
+      event.type !== 'TIMER_FIRED'
+    ) {
+      return false;
+    }
+
     const raceId = (event.payload as Partial<ElementTokenPayload> | undefined)?.eventBasedGatewayRaceId;
 
     return Boolean(raceId && !this.eventBasedGatewayRaces.get(raceId)?.active);
@@ -630,6 +641,7 @@ export class DesEngine {
       return;
     }
 
+    this.recordTaskStart(payload, node, time, resourceStart.resourceId);
     this.scheduleTaskCompletion(node, payload.token, payload.arrivedAt, time, resourceStart.resourceId);
   }
 
@@ -773,7 +785,7 @@ export class DesEngine {
     }
 
     this.tokens.mergeOutputs(payload.token.caseId, payload.variables);
-    this.leaveElement(payload, time);
+    this.queue.schedule('TOKEN_LEAVE_ELEMENT', time, payload);
   }
 
   private receiveSignal(payload: EventReceivedPayload, time: number): void {
@@ -782,7 +794,7 @@ export class DesEngine {
     }
 
     this.tokens.mergeOutputs(payload.token.caseId, payload.variables);
-    this.leaveElement(payload, time);
+    this.queue.schedule('TOKEN_LEAVE_ELEMENT', time, payload);
   }
 
   private fireTimer(payload: ElementTokenPayload, time: number): void {
@@ -790,7 +802,7 @@ export class DesEngine {
       return;
     }
 
-    this.leaveElement(payload, time);
+    this.queue.schedule('TOKEN_LEAVE_ELEMENT', time, payload);
   }
 
   private triggerEventBasedGatewayRace(payload: ElementTokenPayload, time: number): boolean {
@@ -1030,6 +1042,7 @@ export class DesEngine {
       elementId: node.id,
       eventKey: delivery.eventKey,
       sourceCaseId: delivery.sourceCaseId,
+      sourceElementId: delivery.sourceElementId,
       variables: delivery.variables,
       eventBasedGatewayRaceId: eventBasedPayload?.eventBasedGatewayRaceId,
       gatewayId: eventBasedPayload?.gatewayId,
@@ -1209,7 +1222,32 @@ export class DesEngine {
       return;
     }
 
+    this.recordTaskStart({
+      token: queued.token,
+      elementId: queued.node.id,
+      arrivedAt: queued.arrivedAt
+    }, queued.node, time, resourceStart.resourceId);
     this.scheduleTaskCompletion(queued.node, queued.token, queued.arrivedAt, time, resourceStart.resourceId);
+  }
+
+  private recordTaskStart(
+    payload: TaskStartPayload,
+    node: SimNode,
+    time: number,
+    resourceId?: string
+  ): void {
+    const caseState = this.tokens.getCase(payload.token.caseId);
+
+    this.statistics.event('TASK_START', 'TASK_START', {
+      time,
+      caseId: payload.token.caseId,
+      tokenId: payload.token.id,
+      attempt: payload.token.attempt,
+      elementId: node.id,
+      elementName: node.name,
+      resourceId: resourceId ?? node.params.resource?.resourceId,
+      variables: caseState?.outputs
+    });
   }
 
   private sampleFailure(node: SimNode, token: Token): TaskFailureOutcome {
@@ -1294,11 +1332,13 @@ export class DesEngine {
       time: event.time,
       caseId,
       sourceCaseId: payload.sourceCaseId,
+      sourceElementId: payload.sourceElementId,
       tokenId: token?.id,
       attempt: token?.attempt,
       elementId,
       elementName: node?.name,
       resourceId: payload.resourceId ?? node?.params.resource?.resourceId,
+      serviceTime: payload.serviceTime,
       variables: caseState?.outputs ?? payload.variables
     });
   }

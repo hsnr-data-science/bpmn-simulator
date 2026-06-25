@@ -45,7 +45,7 @@ src/
     BpmnElementClassifier.ts
     ExtensionElementReader.ts
     ExtensionElementWriter.ts
-    defaultDiagram.ts
+    demoModels.ts
     simulationModdle.json
   properties/
     SimulationPropertiesProvider.ts
@@ -213,11 +213,12 @@ Die Oberfläche enthält:
 - BPMN Modeler mit Properties Panel
 - Simulation Control Panel mit Start, Pause, Step backward, Step forward, Stop und Reset
 - Einstellungen für Seed, Startzeit, optionale Endzeit, aktuelle Simulationszeit und Animationsgeschwindigkeit
-- Speed-Regler mit den Stufen `1x`, `2x`, `4x`, `8x` und `16x`; `1x` nutzt eine stark verlangsamte Playback-Basis von einem Hundertstel der urspruenglichen Geschwindigkeit
+- Speed-Regler mit den Stufen `1x`, `2x`, `4x`, `8x`, `16x`, `64x`, `256x` und `1024x`; `1x` nutzt eine verlangsamte Playback-Basis von zwei Hundertsteln der urspruenglichen Geschwindigkeit
 - Ressourcenbereich zum Bearbeiten von ID, Name, Kapazität, Wochentagen und stundenweisen Arbeitszeitbereichen
 - einklappbare linke Sidebar-Bereiche fuer Übersicht, Ressourcen, Bottlenecks, Pfade, Statistik, Event Log, Warnungen und Export
 - größenänderbare linke und rechte Sidebar
 - Ergebnisbereich mit Statistik-Tabelle, Event Log, Warnungen und Export Buttons
+- separater Dashboard-Tab mit interaktiven Plotly-Diagrammen
 
 Wenn der bpmn-js-token-simulation-Schalter auf AN steht, erzeugt der obere Start-Button zuerst den vollständigen DES-Lauf und spielt danach dessen Timeline über den zentralen PlaybackController im Diagramm ab. Der urspruengliche interaktive Simulator aus bpmn-js-token-simulation wird nicht geladen; dessen Event-Trigger, Task-Pausen, Gateway-Umschaltungen, Reset/Pause-Controls und Event-Log sind entfernt. Waehrend des Abspielens aktualisieren sich Statistik, Task-Wartezeitboxen, Task-Fehlerzaehler, Event-/Gateway-Haeufigkeiten, Aktivitaetsfarben und Kantenstaerken fortlaufend.
 
@@ -236,8 +237,10 @@ Wenn der bpmn-js-token-simulation-Schalter auf AN steht, erzeugt der obere Start
 - Deadlock-Verdachtsfälle
 - nicht konsumierte Tokens am Simulationsende
 
-Exporte sind als JSON, Simulation Results CSV und Event Log CSV vorbereitet. Das Event Log CSV enthält CaseID, Task-/Event-ID, Name, Startzeit, Endzeit für Tasks, Resource für Tasks und die aktuellen Prozessvariablen als JSON-String.
+Exporte sind als JSON, Simulation Results CSV und Event Log CSV vorbereitet. Beide CSV-Formate verwenden Semikolon als Trennzeichen. Das Event Log CSV enthält CaseID, Task-/Event-ID, Name, Startzeit, Endzeit für Tasks, Resource für Tasks und die aktuellen Prozessvariablen als JSON-String.
+
+Der Dashboard-Tab visualisiert Service- und Wartezeiten für den Gesamtprozess, jeden Task und jede Ressource. Die Prozess-Wartezeit ist die Summe aller Task-Wartezeiten je Prozessinstanz. Ein gruppiertes Balkendiagramm vergleicht Min, Max, Durchschnitt und Median. Zwei interaktive Plotly-Verteilungsdiagramme zeigen die Rohwerte für Service- und Wartezeiten und können gemeinsam zwischen Box- und Violin-Plots umgeschaltet werden. Der Scope kann zwischen Gesamtansicht, Prozess, Tasks und Ressourcen umgeschaltet werden.
 
 ## Beispielmodell
 
-Das mitgelieferte BPMN-Beispiel enthält Start Event, zwei Tasks, XOR-Gateway mit Branch-Wahrscheinlichkeiten, Service Task mit Output-Object und End Event. Es wird beim Start der Anwendung automatisch geladen und kann direkt im Modeler bearbeitet werden.
+Die Demo-Auswahl lädt die BPMN-Dateien direkt aus `tests/bpmn`: das einfache Order-Fulfillment-Modell sowie das Messaging-/Signal-Modell mit mehreren Pools und Event-Based Gateway. Das ausgewählte Modell wird über den Demo-Button geladen und kann direkt im Modeler bearbeitet werden.

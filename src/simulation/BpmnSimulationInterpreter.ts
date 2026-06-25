@@ -179,6 +179,10 @@ export class BpmnSimulationInterpreter {
       return [];
     }
 
+    if (outgoingFlows.length <= 1) {
+      return outgoingFlows.map((flow) => flow.id);
+    }
+
     return this.selectWeightedFlow(node, node.outgoing, random, log);
   }
 

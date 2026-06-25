@@ -2,6 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import type { SimFlow, SimModel, SimNode } from '../../src/types/bpmn';
 import { DesEngine } from '../../src/simulation/DesEngine';
+import { createProgressResult } from '../../src/visualization/DesTokenAnimator';
+import { buildDashboardSeries } from '../../src/visualization/SimulationDashboard';
 
 test('DES draws fixed task duration and completes the process after that duration', () => {
   const result = new DesEngine(createLinearModel(), {
@@ -45,9 +47,14 @@ test('DES uses resource calendars for task start and working-time completion', (
   assert.equal(result.completedCases, 1);
   assert.equal(result.cases[0].cycleTime, 33);
   const taskMetrics = result.elementMetrics.find((metric) => metric.elementId === 'task');
+  const liveResult = createProgressResult(result, result.currentTime ?? 0, []);
+  const liveResource = liveResult.resourceMetrics.find((metric) => metric.resourceId === 'calendar_resource');
 
   assert.equal(taskMetrics?.waitTime, 480);
   assert.equal(taskMetrics?.serviceTime, 180);
+  assert.equal(result.log.find((entry) => entry.eventType === 'TASK_COMPLETE')?.serviceTime, 180);
+  assert.ok(Math.abs((liveResource?.utilization ?? 0) - 1) < 1e-9);
+  assert.ok((liveResource?.utilization ?? 0) <= 1);
 });
 
 test('DES constrains start event arrivals to the configured arrival calendar', () => {
@@ -151,6 +158,36 @@ test('DES reports standard deviation for task waiting times', () => {
 
   assert.ok(Math.abs((taskMetrics?.waitTime ?? 0) - 5) < 1e-9);
   assert.ok(Math.abs((taskMetrics?.waitTimeStddev ?? 0) - 2.5) < 1e-9);
+});
+
+test('Dashboard process wait samples sum actual task waiting per case', () => {
+  const model = createLinearModel();
+  const start = model.nodes.get('start');
+  const task = model.nodes.get('task');
+
+  if (!start || !task) {
+    throw new Error('model incomplete');
+  }
+
+  start.params.arrival = {
+    type: 'fixed',
+    interval: 0,
+    numberOfCases: 2
+  };
+  task.params.resource = {
+    resourceId: 'single_worker',
+    capacity: 1
+  };
+
+  const result = new DesEngine(model, {
+    numberOfRuns: 1,
+    randomSeed: 1,
+    animationSpeed: 1,
+    collectTraces: true
+  }).run();
+  const processSeries = buildDashboardSeries(result).find((series) => series.scope === 'process');
+
+  assert.deepEqual(processSeries?.waitSamples, [0, 5]);
 });
 
 test('DES samples output objects for completed tasks', () => {
@@ -273,12 +310,12 @@ test('DES exports event log CSV and simulation result CSV with resource metrics'
   assert.equal(resource?.errors, 0);
   assert.equal(resource?.serviceTime, 5);
   assert.ok(Math.abs((resource?.utilization ?? 0) - 1) < 1e-9);
-  assert.match(result.exports.eventLogCsv, /CaseID,TaskID \/ EventID,TaskName \/ Event Name,Startzeit,Endzeit,Resource,Variables/);
-  assert.match(result.exports.eventLogCsv, /1,task,Task,2026-06-15 08:00:00,2026-06-15 08:05:00,worker/);
+  assert.match(result.exports.eventLogCsv, /CaseID;TaskID \/ EventID;TaskName \/ Event Name;Startzeit;Endzeit;Resource;Variables/);
+  assert.match(result.exports.eventLogCsv, /1;task;Task;2026-06-15 08:00:00;2026-06-15 08:05:00;worker/);
   assert.match(result.exports.eventLogCsv, /status/);
-  assert.match(result.exports.simulationResultsCsv, /Task,task,Task,1,0,5,5,5,5,0,0,0,0/);
+  assert.match(result.exports.simulationResultsCsv, /Task;task;Task;1;0;5;5;5;5;0;0;0;0/);
   assert.match(result.exports.simulationResultsCsv, /Auslastung/);
-  assert.match(result.exports.simulationResultsCsv, /Resource,worker,worker,1,0,5,5,5,5,0,0,0,0,1/);
+  assert.match(result.exports.simulationResultsCsv, /Resource;worker;worker;1;0;5;5;5;5;0;0;0;0;1/);
 });
 
 test('DES routes XOR conditions with variables from previous output objects', () => {

@@ -186,9 +186,18 @@ function groupNodeTokens(tokens: VisualTokenState[]): Array<{
   tokens: VisualTokenState[];
 }> {
   const groups = new Map<string, { elementId: string; status: VisualTokenState['status']; tokens: VisualTokenState[] }>();
+  const movingDestinations = new Set(
+    tokens
+      .filter((token) => token.status === 'moving' && token.targetElementId)
+      .map((token) => `${token.processInstanceId}:${token.targetElementId}`)
+  );
 
   for (const token of tokens) {
     if (!token.elementId || token.status === 'moving' || token.status === 'completed' || token.status === 'terminated') {
+      continue;
+    }
+
+    if (movingDestinations.has(`${token.processInstanceId}:${token.elementId}`)) {
       continue;
     }
 

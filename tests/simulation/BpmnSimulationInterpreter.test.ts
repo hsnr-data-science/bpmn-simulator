@@ -136,6 +136,25 @@ test('XOR gateway normalizes branchProbability sums that are not 1', () => {
   assert.ok(logs.some((entry) => entry.message.includes('normalisiert')));
 });
 
+test('XOR gateway with one outgoing flow does not require branchProbability', () => {
+  const model = createXorModel({
+    flows: [
+      flow('flow_only', undefined, false)
+    ]
+  });
+  const logs: SimulationLogEntry[] = [];
+  const interpreter = new BpmnSimulationInterpreter(model);
+
+  const selected = interpreter.getOutgoingFlowIds(
+    model.nodes.get('xor') as SimNode,
+    new SeededRandom(3),
+    (entry) => logs.push(entry)
+  );
+
+  assert.deepEqual(selected, ['flow_only']);
+  assert.ok(!logs.some((entry) => entry.message.includes('branchProbability')));
+});
+
 function createXorModel(options: { flows: SimFlow[]; defaultFlowId?: string }): SimModel {
   const xor: SimNode = {
     id: 'xor',

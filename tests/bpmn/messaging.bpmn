@@ -7,7 +7,7 @@
     <bpmn:messageFlow id="Flow_1hh11gu" sourceRef="Event_041oh80" targetRef="Event_179da30" />
     <bpmn:messageFlow id="Flow_1m7h99j" sourceRef="Event_0ao9nup" targetRef="Event_1vd2smq" />
   </bpmn:collaboration>
-  <bpmn:process id="Process_Order_Fulfillment" name="Order Fulfillment DES Demo" isExecutable="false">
+  <bpmn:process id="Process_Order_Fulfillment" name="Order Fulfillment with Messaging" isExecutable="false">
     <bpmn:extensionElements>
       <sim:resourceCatalog>
         <sim:resource id="Resource_1" name="Resource 1" capacity="1" weekdays="1,2,3,4,5" hourRanges="8-17" />

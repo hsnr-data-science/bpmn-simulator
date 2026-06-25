@@ -27,7 +27,7 @@ type FlowActivation = {
 };
 
 const PROGRESS_INTERVAL_MS = 250;
-const PLAYBACK_BASE_SPEED_FACTOR = 0.01;
+const PLAYBACK_BASE_SPEED_FACTOR = 0.02;
 
 export class DesTokenAnimator {
   private readonly renderer: TimelineOverlayRenderer;
@@ -170,7 +170,7 @@ function shouldEmitProgress(snapshot: PlaybackSnapshot, run: PlaybackRun, force:
   return performance.now() - run.lastProgressEmit >= PROGRESS_INTERVAL_MS;
 }
 
-function createProgressResult(
+export function createProgressResult(
   result: SimulationResult,
   currentTime: number,
   flowActivations: FlowActivation[]
@@ -198,6 +198,7 @@ function createProgressResult(
   const enterQueues = new Map<string, number[]>();
   const startQueues = new Map<string, number[]>();
   const waitQueues = new Map<string, number[]>();
+  const resourceStartQueues = new Map<string, Array<{ resourceId: string; startTime: number }>>();
   const visibleLog: SimulationLogEntry[] = [];
 
   for (const entry of result.log) {
@@ -235,20 +236,9 @@ function createProgressResult(
         metric.waitTimeSamples?.push(waitTime);
         pushQueue(waitQueues, key, waitTime);
         pushQueue(startQueues, key, time);
-        break;
-      }
-      case 'TASK_COMPLETE': {
-        const startTime = shiftQueue(startQueues, key) ?? time;
-
-        metric.completions += 1;
-        const serviceTime = hoursToMinutes(time - startTime);
-
-        metric.serviceTime += serviceTime;
-        metric.serviceTimeSamples?.push(serviceTime);
 
         if (entry.resourceId) {
           const resource = resourceMetricsById.get(entry.resourceId);
-          const waitTime = shiftQueue(waitQueues, key) ?? 0;
 
           if (resource) {
             if ((entry.attempt ?? 0) === 0) {
@@ -257,11 +247,31 @@ function createProgressResult(
 
             resource.waitTime += waitTime;
             resource.waitTimeSamples?.push(waitTime);
+            resource.firstTaskStartTime = resource.firstTaskStartTime === undefined
+              ? time
+              : Math.min(resource.firstTaskStartTime, time);
+            pushResourceStart(resourceStartQueues, key, entry.resourceId, time);
+          }
+        }
+        break;
+      }
+      case 'TASK_COMPLETE': {
+        const startTime = shiftQueue(startQueues, key) ?? time;
+
+        metric.completions += 1;
+        const serviceTime = entry.serviceTime ?? hoursToMinutes(time - startTime);
+
+        metric.serviceTime += serviceTime;
+        metric.serviceTimeSamples?.push(serviceTime);
+
+        if (entry.resourceId) {
+          const resource = resourceMetricsById.get(entry.resourceId);
+
+          if (resource) {
+            shiftQueue(waitQueues, key);
+            shiftResourceStart(resourceStartQueues, key, entry.resourceId);
             resource.serviceTime += serviceTime;
             resource.serviceTimeSamples?.push(serviceTime);
-            resource.firstTaskStartTime = resource.firstTaskStartTime === undefined
-              ? startTime
-              : Math.min(resource.firstTaskStartTime, startTime);
             resource.lastTaskEndTime = resource.lastTaskEndTime === undefined
               ? time
               : Math.max(resource.lastTaskEndTime, time);
@@ -289,6 +299,7 @@ function createProgressResult(
   }
 
   addOpenWaitAndServiceSamples(currentTime, metricsById, enterQueues, startQueues);
+  addOpenResourceService(currentTime, resourceMetricsById, resourceStartQueues);
 
   for (const metric of elementMetrics) {
     metric.waitTimeStddev = standardDeviation(metric.waitTimeSamples ?? []);
@@ -378,6 +389,30 @@ function addOpenWaitAndServiceSamples(
   }
 }
 
+function addOpenResourceService(
+  currentTime: number,
+  resources: Map<string, ResourceMetrics>,
+  starts: Map<string, Array<{ resourceId: string; startTime: number }>>
+): void {
+  for (const entries of starts.values()) {
+    for (const entry of entries) {
+      const resource = resources.get(entry.resourceId);
+
+      if (!resource) {
+        continue;
+      }
+
+      const activeServiceTime = workingTimeBetween(entry.startTime, currentTime, resource) * 60;
+
+      resource.serviceTime += activeServiceTime;
+      resource.serviceTimeSamples?.push(activeServiceTime);
+      resource.lastTaskEndTime = resource.lastTaskEndTime === undefined
+        ? currentTime
+        : Math.max(resource.lastTaskEndTime, currentTime);
+    }
+  }
+}
+
 function createFlowActivations(result: SimulationResult): FlowActivation[] {
   return result.timeline
     .filter((event) => event.type === 'TOKEN_MOVE_START' && event.sequenceFlowId)
@@ -426,7 +461,9 @@ function calculateResourceUtilization(metric: ResourceMetrics): number {
   const capacity = Math.max(1, Math.floor(metric.capacity ?? 1));
   const availableCapacityHours = workingHours * capacity;
 
-  return availableCapacityHours > 0 ? (metric.serviceTime / 60) / availableCapacityHours : 0;
+  return availableCapacityHours > 0
+    ? Math.min(1, Math.max(0, (metric.serviceTime / 60) / availableCapacityHours))
+    : 0;
 }
 
 function metricKey(caseId: number | undefined, elementId: string): string {
@@ -450,6 +487,36 @@ function pushQueue(map: Map<string, number[]>, key: string, value: number): void
 
 function shiftQueue(map: Map<string, number[]>, key: string): number | undefined {
   return map.get(key)?.shift();
+}
+
+function pushResourceStart(
+  map: Map<string, Array<{ resourceId: string; startTime: number }>>,
+  key: string,
+  resourceId: string,
+  startTime: number
+): void {
+  const values = map.get(key) ?? [];
+
+  values.push({ resourceId, startTime });
+  map.set(key, values);
+}
+
+function shiftResourceStart(
+  map: Map<string, Array<{ resourceId: string; startTime: number }>>,
+  key: string,
+  resourceId: string
+): void {
+  const values = map.get(key);
+
+  if (!values?.length) {
+    return;
+  }
+
+  const index = values.findIndex((entry) => entry.resourceId === resourceId);
+
+  if (index >= 0) {
+    values.splice(index, 1);
+  }
 }
 
 function standardDeviation(values: number[]): number {

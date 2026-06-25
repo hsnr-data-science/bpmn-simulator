@@ -119,11 +119,13 @@ export class StatisticsCollector {
       elementName?: string;
       caseId?: number;
       sourceCaseId?: number;
+      sourceElementId?: string;
       tokenId?: string;
       attempt?: number;
       time?: number;
       level?: SimulationLogEntry['level'];
       resourceId?: string;
+      serviceTime?: number;
       variables?: Record<string, CaseOutputValue>;
     } = {}
   ): SimulationLogEntry {
@@ -132,12 +134,14 @@ export class StatisticsCollector {
       eventType,
       caseId: options.caseId,
       sourceCaseId: options.sourceCaseId,
+      sourceElementId: options.sourceElementId,
       tokenId: options.tokenId,
       attempt: options.attempt,
       message,
       elementId: options.elementId,
       elementName: options.elementName,
       resourceId: options.resourceId,
+      serviceTime: options.serviceTime,
       variables: cloneVariables(options.variables),
       time: options.time
     };
@@ -337,6 +341,7 @@ export class StatisticsCollector {
 }
 
 type ExportBase = Omit<SimulationResult, 'exports'>;
+const CSV_DELIMITER = ';';
 
 function calculatePathProbabilities(flowMetrics: FlowMetrics[]) {
   const totalsBySource = new Map<string, number>();
@@ -401,7 +406,7 @@ function createSimulationResultsCsv(result: ExportBase): string {
       'Avg Wartezeit',
       'Median Wartezeit',
       'Auslastung'
-    ].map(csvCell).join(','),
+    ].map(csvCell).join(CSV_DELIMITER),
     resultCsvLine(
       'Process',
       'process',
@@ -426,7 +431,7 @@ function createEventLogCsv(result: ExportBase): string {
   const lines = [
     ['CaseID', 'TaskID / EventID', 'TaskName / Event Name', 'Startzeit', 'Endzeit', 'Resource', 'Variables']
       .map(csvCell)
-      .join(',')
+      .join(CSV_DELIMITER)
   ];
 
   for (const entry of result.log) {
@@ -452,7 +457,7 @@ function createEventLogCsv(result: ExportBase): string {
         formatSimulationDateTime(result, entry.time),
         entry.resourceId ?? '',
         variablesJson(entry.variables ?? caseOutputs.get(caseId))
-      ].map(csvCell).join(','));
+      ].map(csvCell).join(CSV_DELIMITER));
       continue;
     }
 
@@ -465,7 +470,7 @@ function createEventLogCsv(result: ExportBase): string {
         '',
         '',
         variablesJson(entry.variables ?? caseOutputs.get(caseId))
-      ].map(csvCell).join(','));
+      ].map(csvCell).join(CSV_DELIMITER));
     }
   }
 
@@ -500,13 +505,13 @@ function resultCsvLine(
     wait.avg,
     wait.median,
     utilization === undefined ? '' : formatNumber(utilization)
-  ].map(csvCell).join(',');
+  ].map(csvCell).join(CSV_DELIMITER);
 }
 
 function csvCell(value: string | number): string {
   const text = String(value);
 
-  return /[",\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
+  return /[";\r\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
 }
 
 function sampleStats(values: number[]): Record<'min' | 'max' | 'avg' | 'median', string> {
@@ -631,7 +636,9 @@ function calculateResourceUtilization(metric: ResourceMetrics): number {
   const capacity = Math.max(1, Math.floor(metric.capacity ?? 1));
   const availableCapacityHours = workingHours * capacity;
 
-  return availableCapacityHours > 0 ? (metric.serviceTime / 60) / availableCapacityHours : 0;
+  return availableCapacityHours > 0
+    ? Math.min(1, Math.max(0, (metric.serviceTime / 60) / availableCapacityHours))
+    : 0;
 }
 
 function cloneVariables(

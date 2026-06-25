@@ -1,8 +1,8 @@
 import BpmnModeler from 'bpmn-js/lib/Modeler';
 import { BpmnPropertiesPanelModule, BpmnPropertiesProviderModule } from 'bpmn-js-properties-panel';
-import { createIcons, Download, File, FilePlus, Pause, Play, Plus, RotateCcw, Square, StepBack, StepForward, Trash2, Upload } from 'lucide';
+import { ChartNoAxesCombined, createIcons, Download, File, FilePlus, Pause, Play, Plus, RotateCcw, Square, StepBack, StepForward, Trash2, Upload, Workflow } from 'lucide';
 import { buildBpmnGraph } from '../bpmn/BpmnGraphBuilder';
-import { defaultDiagram } from '../bpmn/defaultDiagram';
+import { DEMO_MODELS, getDemoModel } from '../bpmn/demoModels';
 import { emptyDiagram } from '../bpmn/emptyDiagram';
 import { readResourceCatalog } from '../bpmn/ExtensionElementReader';
 import { updateResourceCatalog } from '../bpmn/ExtensionElementWriter';
@@ -22,6 +22,7 @@ import { SimulationPropertiesProviderModule } from '../properties/SimulationProp
 import { DesTokenSimulationModule } from '../visualization/DesTokenSimulationModule';
 import { DesTokenAnimator } from '../visualization/DesTokenAnimator';
 import { HeatmapOverlayManager } from '../visualization/HeatmapOverlayManager';
+import { SimulationDashboard } from '../visualization/SimulationDashboard';
 import { SimulationLogPanel } from '../visualization/SimulationLogPanel';
 import { TokenOverlayManager } from '../visualization/TokenOverlayManager';
 
@@ -54,6 +55,7 @@ type ModelerWithDefinitions = BpmnModeler & {
 
 type AppElements = {
   newDiagram: HTMLButtonElement;
+  demoModel: HTMLSelectElement;
   emptyDiagram: HTMLButtonElement;
   importDiagram: HTMLButtonElement;
   exportDiagram: HTMLButtonElement;
@@ -67,7 +69,11 @@ type AppElements = {
   exportJson: HTMLButtonElement;
   exportResultsCsv: HTMLButtonElement;
   exportEventLogCsv: HTMLButtonElement;
+  modelerTab: HTMLButtonElement;
+  dashboardTab: HTMLButtonElement;
   workspace: HTMLElement;
+  dashboardView: HTMLElement;
+  dashboardRoot: HTMLElement;
   leftResizer: HTMLElement;
   rightResizer: HTMLElement;
   fileInput: HTMLInputElement;
@@ -98,6 +104,7 @@ export class ModelerApp {
   private readonly canvas: Canvas;
   private readonly heatmapOverlays: HeatmapOverlayManager;
   private readonly tokenAnimator: DesTokenAnimator;
+  private readonly dashboard: SimulationDashboard;
   private readonly eventLogPanel: SimulationLogPanel;
   private readonly warningPanel: SimulationLogPanel;
   private readonly elements: AppElements;
@@ -107,6 +114,7 @@ export class ModelerApp {
   private selectedTaskId: string | undefined;
   private tokenSimulationActive = false;
   private simulationRunId = 0;
+  private activeView: 'modeler' | 'dashboard' = 'modeler';
 
   constructor(root: HTMLElement) {
     this.root = root;
@@ -143,6 +151,7 @@ export class ModelerApp {
     );
 
     this.elements = this.collectElements();
+    this.dashboard = new SimulationDashboard(this.elements.dashboardRoot);
     this.eventLogPanel = new SimulationLogPanel(this.elements.eventLogList, 'No events');
     this.warningPanel = new SimulationLogPanel(this.elements.warningList, 'No warnings');
     this.initializeSimulationTimes();
@@ -155,12 +164,12 @@ export class ModelerApp {
   }
 
   async start(): Promise<void> {
-    await this.importDiagram(defaultDiagram, 'Demo model loaded');
+    await this.loadSelectedDemo();
   }
 
   private bindEvents(): void {
     this.elements.newDiagram.addEventListener('click', () => {
-      void this.importDiagram(defaultDiagram, 'Demo model loaded');
+      void this.loadSelectedDemo();
     });
 
     this.elements.emptyDiagram.addEventListener('click', () => {
@@ -207,6 +216,14 @@ export class ModelerApp {
 
     this.elements.exportEventLogCsv.addEventListener('click', () => {
       this.exportResult('eventLogCsv');
+    });
+
+    this.elements.modelerTab.addEventListener('click', () => {
+      void this.switchView('modeler');
+    });
+
+    this.elements.dashboardTab.addEventListener('click', () => {
+      void this.switchView('dashboard');
     });
 
     this.elements.runSimulation.addEventListener('click', () => {
@@ -345,7 +362,17 @@ export class ModelerApp {
     }
   }
 
+  private async loadSelectedDemo(): Promise<void> {
+    const demo = getDemoModel(this.elements.demoModel.value);
+
+    await this.importDiagram(demo.xml, `Demo model "${demo.name}" loaded`);
+  }
+
   private async importDiagram(xml: string, successMessage = 'Diagram loaded'): Promise<void> {
+    if (this.activeView === 'dashboard') {
+      await this.switchView('modeler');
+    }
+
     this.simulationRunId += 1;
     this.clearSimulationState();
     this.elements.resourceList.replaceChildren();
@@ -451,6 +478,7 @@ export class ModelerApp {
     this.lastResult = undefined;
     this.displayedResult = undefined;
     this.selectedTaskId = undefined;
+    this.dashboard.clear();
     this.setExportButtons(false);
     this.renderEmptyResults();
   }
@@ -548,6 +576,43 @@ export class ModelerApp {
     this.updateCurrentSimulationTime(result);
     this.eventLogPanel.render(result.log);
     this.warningPanel.render(result.log.filter((entry) => entry.level !== 'info'));
+
+    if (this.activeView === 'dashboard' && !this.tokenAnimator.isPlaying()) {
+      void this.renderDashboard(result);
+    }
+  }
+
+  private async switchView(view: 'modeler' | 'dashboard'): Promise<void> {
+    this.activeView = view;
+    const dashboardActive = view === 'dashboard';
+
+    this.elements.workspace.hidden = dashboardActive;
+    this.elements.dashboardView.hidden = !dashboardActive;
+    this.elements.modelerTab.classList.toggle('is-active', !dashboardActive);
+    this.elements.dashboardTab.classList.toggle('is-active', dashboardActive);
+    this.elements.modelerTab.setAttribute('aria-selected', String(!dashboardActive));
+    this.elements.dashboardTab.setAttribute('aria-selected', String(dashboardActive));
+
+    if (dashboardActive) {
+      const result = this.displayedResult ?? this.lastResult;
+
+      if (result) {
+        await this.renderDashboard(result);
+      }
+
+      requestAnimationFrame(() => this.dashboard.resize());
+      return;
+    }
+
+    requestAnimationFrame(() => this.canvas.zoom('fit-viewport'));
+  }
+
+  private async renderDashboard(result: SimulationResult): Promise<void> {
+    try {
+      await this.dashboard.render(result);
+    } catch (error) {
+      this.showApplicationError('Dashboard rendering failed', error);
+    }
   }
 
   private renderBottlenecks(metrics: ElementMetrics[]): void {
@@ -784,6 +849,7 @@ export class ModelerApp {
   private collectElements(): AppElements {
     return {
       newDiagram: getElement('new-diagram'),
+      demoModel: getElement('demo-model'),
       emptyDiagram: getElement('empty-diagram'),
       importDiagram: getElement('import-diagram'),
       exportDiagram: getElement('export-diagram'),
@@ -797,7 +863,11 @@ export class ModelerApp {
       exportJson: getElement('export-json'),
       exportResultsCsv: getElement('export-results-csv'),
       exportEventLogCsv: getElement('export-event-log-csv'),
+      modelerTab: getElement('modeler-tab'),
+      dashboardTab: getElement('dashboard-tab'),
       workspace: getElement('workspace'),
+      dashboardView: getElement('dashboard-view'),
+      dashboardRoot: getElement('dashboard-root'),
       leftResizer: getElement('left-sidebar-resizer'),
       rightResizer: getElement('right-sidebar-resizer'),
       fileInput: getElement('file-input'),
@@ -884,7 +954,7 @@ export class ModelerApp {
   }
 }
 
-const ANIMATION_SPEEDS = [1, 2, 4, 8, 16] as const;
+const ANIMATION_SPEEDS = [1, 2, 4, 8, 16, 64, 256, 1024] as const;
 const LIVE_RESULT_RENDER_INTERVAL_MS = 450;
 const LIVE_OVERLAY_RENDER_INTERVAL_MS = 700;
 const LIVE_STATUS_RENDER_INTERVAL_MS = 250;
@@ -897,7 +967,13 @@ function createShellMarkup(): string {
           <button id="empty-diagram" class="icon-button" title="Create empty model" aria-label="Create empty model">
             <i data-lucide="file"></i>
           </button>
-          <button id="new-diagram" class="icon-button" title="Load demo model" aria-label="Load demo model">
+          <label class="demo-model-control">
+            <span>Demo</span>
+            <select id="demo-model">
+              ${DEMO_MODELS.map((model) => `<option value="${model.id}">${model.name}</option>`).join('')}
+            </select>
+          </label>
+          <button id="new-diagram" class="icon-button" title="Load selected demo model" aria-label="Load selected demo model">
             <i data-lucide="file-plus"></i>
           </button>
           <button id="import-diagram" class="icon-button" title="Import BPMN" aria-label="Import BPMN">
@@ -945,7 +1021,7 @@ function createShellMarkup(): string {
           </button>
           <label class="speed-control">
             <span>Speed</span>
-            <input id="animation-speed" type="range" min="0" max="4" step="1" value="0" list="animation-speed-marks" />
+            <input id="animation-speed" type="range" min="0" max="7" step="1" value="0" list="animation-speed-marks" />
             <strong id="animation-speed-value">1x</strong>
           </label>
           <datalist id="animation-speed-marks">
@@ -954,10 +1030,23 @@ function createShellMarkup(): string {
             <option value="2" label="4x"></option>
             <option value="3" label="8x"></option>
             <option value="4" label="16x"></option>
+            <option value="5" label="64x"></option>
+            <option value="6" label="256x"></option>
+            <option value="7" label="1024x"></option>
           </datalist>
         </div>
       </header>
-      <section id="workspace" class="workspace">
+      <nav class="view-tabs" role="tablist" aria-label="Application views">
+        <button id="modeler-tab" class="view-tab is-active" role="tab" aria-selected="true" aria-controls="workspace">
+          <i data-lucide="workflow"></i>
+          <span>Modeler</span>
+        </button>
+        <button id="dashboard-tab" class="view-tab" role="tab" aria-selected="false" aria-controls="dashboard-view">
+          <i data-lucide="chart-no-axes-combined"></i>
+          <span>Dashboard</span>
+        </button>
+      </nav>
+      <section id="workspace" class="workspace view-panel" role="tabpanel" aria-labelledby="modeler-tab">
         <aside class="simulation-panel">
           <div class="panel-header">
             <h1>BPMN DES</h1>
@@ -1074,6 +1163,9 @@ function createShellMarkup(): string {
         <div id="right-sidebar-resizer" class="sidebar-resizer right-sidebar-resizer" role="separator" aria-label="Resize right sidebar"></div>
         <aside id="properties" class="properties-panel"></aside>
       </section>
+      <section id="dashboard-view" class="dashboard-view view-panel" role="tabpanel" aria-labelledby="dashboard-tab" hidden>
+        <div id="dashboard-root" class="dashboard-root"></div>
+      </section>
       <input id="file-input" class="hidden-input" type="file" accept=".bpmn,.xml" />
     </main>
   `;
@@ -1085,6 +1177,7 @@ function createAppIcons(): void {
       Download,
       File,
       FilePlus,
+      ChartNoAxesCombined,
       Pause,
       Play,
       Plus,
@@ -1093,7 +1186,8 @@ function createAppIcons(): void {
       StepBack,
       StepForward,
       Trash2,
-      Upload
+      Upload,
+      Workflow
     }
   });
 }
