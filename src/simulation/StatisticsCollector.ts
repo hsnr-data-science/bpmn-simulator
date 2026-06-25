@@ -7,6 +7,7 @@ import type {
   ResourceMetrics,
   SimulationConfig,
   SimulationEventType,
+  SimulationExports,
   SimulationLogEntry,
   SimulationResult
 } from '../types/simulation';
@@ -191,7 +192,10 @@ export class StatisticsCollector {
     const failedCases = cases.filter((caseTrace) => caseTrace.status === 'failed').length;
     const deadlockSuspicions = cases.filter((caseTrace) => caseTrace.status === 'running').length;
     const unconsumedTokens = cases.reduce((sum, caseTrace) => sum + caseTrace.activeTokens, 0);
-    const maxTime = Math.max(...cases.map((caseTrace) => caseTrace.endTime), currentTime, 0);
+    const maxTime = cases.reduce(
+      (latest, caseTrace) => Math.max(latest, caseTrace.endTime),
+      Math.max(currentTime, 0)
+    );
     const elapsedTime = Math.max(0, maxTime - (options.startTime ?? 0));
     const warnings = this.logEntries
       .filter((entry) => entry.level === 'warning')
@@ -253,12 +257,7 @@ export class StatisticsCollector {
 
     return {
       ...baseResult,
-      exports: {
-        json: JSON.stringify(baseResult, null, 2),
-        csv: createSimulationResultsCsv(baseResult),
-        simulationResultsCsv: createSimulationResultsCsv(baseResult),
-        eventLogCsv: createEventLogCsv(baseResult)
-      }
+      exports: createLazyExports(baseResult)
     };
   }
 
@@ -342,6 +341,35 @@ export class StatisticsCollector {
 
 type ExportBase = Omit<SimulationResult, 'exports'>;
 const CSV_DELIMITER = ';';
+
+function createLazyExports(result: ExportBase): SimulationExports {
+  let json: string | undefined;
+  let simulationResultsCsv: string | undefined;
+  let eventLogCsv: string | undefined;
+
+  return {
+    get json() {
+      json ??= JSON.stringify(result, null, 2);
+
+      return json;
+    },
+    get csv() {
+      simulationResultsCsv ??= createSimulationResultsCsv(result);
+
+      return simulationResultsCsv;
+    },
+    get simulationResultsCsv() {
+      simulationResultsCsv ??= createSimulationResultsCsv(result);
+
+      return simulationResultsCsv;
+    },
+    get eventLogCsv() {
+      eventLogCsv ??= createEventLogCsv(result);
+
+      return eventLogCsv;
+    }
+  };
+}
 
 function calculatePathProbabilities(flowMetrics: FlowMetrics[]) {
   const totalsBySource = new Map<string, number>();

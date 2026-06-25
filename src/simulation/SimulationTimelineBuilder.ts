@@ -11,6 +11,7 @@ export function buildSimulationTimeline(
 ): TimelineEvent[] {
   const events: TimelineEvent[] = [];
   const firstTimelineTime = findFirstTimelineTime(log);
+  const seenTokenIds = new Set<string>();
 
   for (const [index, entry] of log.entries()) {
     const mapped = mapLogEntryToTimelineEvent(model, entry, index * 10, firstTimelineTime);
@@ -79,7 +80,8 @@ export function buildSimulationTimeline(
       });
     }
 
-    if (entry.tokenId && firstTokenOccurrence(log, index, entry.tokenId)) {
+    if (entry.tokenId && !seenTokenIds.has(entry.tokenId)) {
+      seenTokenIds.add(entry.tokenId);
       events.push({
         id: `timeline:token-created:${entry.tokenId}`,
         simulationTime: entryTime(entry, firstTimelineTime),
@@ -92,7 +94,7 @@ export function buildSimulationTimeline(
     }
   }
 
-  events.push(...buildMovementEvents(model, log, cases, events.length * 10));
+  appendMovementEvents(model, log, cases, events, events.length * 10);
   applyCrossProcessEventCausality(events, log);
 
   return events.sort((left, right) => {
@@ -208,13 +210,13 @@ function mapEventType(
   }
 }
 
-function buildMovementEvents(
+function appendMovementEvents(
   model: SimModel,
   log: SimulationLogEntry[],
   cases: CaseTrace[],
+  events: TimelineEvent[],
   initialSequence: number
-): TimelineEvent[] {
-  const events: TimelineEvent[] = [];
+): void {
   const enterTimes = createElementEnterTimeQueues(log);
   const leaveTimes = createEventTimeQueues(log, 'TOKEN_LEAVE_ELEMENT');
   let sequence = initialSequence;
@@ -279,8 +281,6 @@ function buildMovementEvents(
       });
     }
   }
-
-  return events;
 }
 
 function applyCrossProcessEventCausality(
@@ -299,10 +299,33 @@ function applyCrossProcessEventCausality(
     })
     .sort((left, right) => (left.time ?? 0) - (right.time ?? 0));
 
+  if (!receivedEvents.length) {
+    return;
+  }
+
+  const eventsByCase = new Map<string, TimelineEvent[]>();
+  const senderArrivals = new Map<string, TimelineEvent[]>();
+
+  for (const event of events) {
+    const caseEvents = eventsByCase.get(event.processInstanceId) ?? [];
+
+    caseEvents.push(event);
+    eventsByCase.set(event.processInstanceId, caseEvents);
+
+    if (event.type === 'TOKEN_MOVE_END' && event.targetElementId) {
+      const key = caseElementKey(event.processInstanceId, event.targetElementId);
+      const arrivals = senderArrivals.get(key) ?? [];
+
+      arrivals.push(event);
+      senderArrivals.set(key, arrivals);
+    }
+  }
+
   for (const received of receivedEvents) {
     const sourceCaseId = String(received.sourceCaseId);
     const receiverCaseId = String(received.caseId);
-    const receiveEvent = events.find((event) => {
+    const receiverEvents = eventsByCase.get(receiverCaseId) ?? [];
+    const receiveEvent = receiverEvents.find((event) => {
       return event.processInstanceId === receiverCaseId &&
         event.tokenId === received.tokenId &&
         event.elementId === received.elementId &&
@@ -315,15 +338,15 @@ function applyCrossProcessEventCausality(
 
     const receiveTime = receiveEvent.simulationTime;
     const receiveSequence = receiveEvent.sequence;
-    const senderArrivalTime = events
-      .filter((event) => {
-        return event.type === 'TOKEN_MOVE_END' &&
-          event.processInstanceId === sourceCaseId &&
-          event.targetElementId === received.sourceElementId &&
-          event.simulationTime >= receiveTime;
-      })
+    const senderArrivalTime = (senderArrivals.get(caseElementKey(sourceCaseId, received.sourceElementId ?? '')) ?? [])
       .reduce<number | undefined>((earliest, event) => {
-        return earliest === undefined ? event.simulationTime : Math.min(earliest, event.simulationTime);
+        if (event.simulationTime < receiveTime) {
+          return earliest;
+        }
+
+        return earliest === undefined
+          ? event.simulationTime
+          : Math.min(earliest, event.simulationTime);
       }, undefined);
 
     if (senderArrivalTime === undefined || senderArrivalTime <= receiveTime) {
@@ -332,9 +355,8 @@ function applyCrossProcessEventCausality(
 
     const delay = senderArrivalTime - receiveTime;
 
-    for (const event of events) {
+    for (const event of receiverEvents) {
       if (
-        event.processInstanceId !== receiverCaseId ||
         event.simulationTime < receiveTime ||
         (
           event.simulationTime === receiveTime &&
@@ -351,6 +373,10 @@ function applyCrossProcessEventCausality(
       }
     }
   }
+}
+
+function caseElementKey(caseId: string, elementId: string): string {
+  return `${caseId}\u0000${elementId}`;
 }
 
 function createElementEnterTimeQueues(
@@ -408,11 +434,15 @@ function createEventTimeQueues(
 }
 
 function findFirstTimelineTime(log: SimulationLogEntry[]): number {
-  const times = log
-    .map((entry) => entry.time)
-    .filter((time): time is number => Number.isFinite(time));
+  let earliest = Number.POSITIVE_INFINITY;
 
-  return times.length ? Math.min(...times) : 0;
+  for (const entry of log) {
+    if (Number.isFinite(entry.time)) {
+      earliest = Math.min(earliest, entry.time ?? earliest);
+    }
+  }
+
+  return Number.isFinite(earliest) ? earliest : 0;
 }
 
 function entryTime(entry: SimulationLogEntry, fallback: number): number {
@@ -433,16 +463,6 @@ function peekCaseTime(queues: Map<string, number[]>, elementId: string): number 
 
 function shiftCaseTime(queues: Map<string, number[]>, elementId: string): number | undefined {
   return queues.get(elementId)?.shift();
-}
-
-function firstTokenOccurrence(log: SimulationLogEntry[], index: number, tokenId: string): boolean {
-  for (let candidateIndex = 0; candidateIndex < index; candidateIndex += 1) {
-    if (log[candidateIndex].tokenId === tokenId) {
-      return false;
-    }
-  }
-
-  return true;
 }
 
 function fallbackTokenId(entry: SimulationLogEntry): string | undefined {

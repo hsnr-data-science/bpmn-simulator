@@ -54,7 +54,10 @@ export class HeatmapOverlayManager {
     this.clear();
 
     const taskMetrics = result.elementMetrics.filter((metric) => isActivityMetric(metric.type));
-    const maxAverageWait = Math.max(...taskMetrics.map((metric) => averageWait(metric)), 0);
+    const maxAverageWait = taskMetrics.reduce(
+      (maximum, metric) => Math.max(maximum, averageWait(metric)),
+      0
+    );
     const caseTotal = Math.max(1, result.options.numberOfRuns, result.cases.length);
     const maxEventGatewayVisits = Math.max(
       ...result.elementMetrics

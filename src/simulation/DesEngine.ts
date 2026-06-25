@@ -114,9 +114,9 @@ export class DesEngine {
     const startedAt = new Date();
 
     this.logUnsupportedElements();
-    this.scheduleCaseArrivals();
+    const scheduledStarts = this.scheduleCaseArrivals();
 
-    const maxEvents = Math.max(10000, this.options.numberOfRuns * 2500);
+    const maxEvents = calculateEventLimit(scheduledStarts, this.options.numberOfRuns);
     let processedEvents = 0;
 
     while (this.queue.length) {
@@ -136,7 +136,9 @@ export class DesEngine {
       processedEvents += 1;
 
       if (processedEvents > maxEvents) {
-        this.statistics.warn('Simulation gestoppt: Ereignislimit erreicht. Das Modell enthaelt vermutlich eine Endlosschleife.');
+        this.statistics.warn(
+          `Simulation stopped after ${processedEvents} events because the safety limit of ${maxEvents} events was reached. The model may contain an infinite loop.`
+        );
         break;
       }
 
@@ -219,7 +221,7 @@ export class DesEngine {
     return Boolean(raceId && !this.eventBasedGatewayRaces.get(raceId)?.active);
   }
 
-  private scheduleCaseArrivals(): void {
+  private scheduleCaseArrivals(): number {
     let scheduledStarts = 0;
 
     for (const startNode of this.interpreter.getRootStartNodes()) {
@@ -247,6 +249,8 @@ export class DesEngine {
         'Kein automatisch startendes Start Event geplant. Die Simulation wartet auf Message-/Signal-Starts oder explizite externe Ereignisse.'
       );
     }
+
+    return scheduledStarts;
   }
 
   private handleCaseArrival(payload: CaseArrivalPayload, time: number): void {
@@ -906,6 +910,8 @@ export class DesEngine {
   private publishSignal(node: SimNode, definition: SimEventDefinition, token: Token, time: number): void {
     const eventKey = this.interpreter.getEventKey(definition);
     const delivery = this.createDelivery(eventKey, node, token);
+    const sourceCase = this.tokens.getCase(token.caseId);
+    const correlatedParentCaseId = sourceCase?.parentCaseId;
     let delivered = 0;
 
     for (const startNode of this.findMatchingStartNodes('signal', eventKey)) {
@@ -922,15 +928,30 @@ export class DesEngine {
     for (const catchNode of this.findMatchingCatchNodes('signal', eventKey)) {
       const waiting = this.waitingEventTokens.get(catchNode.id) ?? [];
 
-      while (waiting.length) {
-        const waitingToken = waiting.shift();
+      if (correlatedParentCaseId !== undefined) {
+        const waitingToken = shiftMatchingWaitingToken(waiting, delivery);
 
-        if (!waitingToken) {
+        if (waitingToken) {
+          this.scheduleEventReceived('SIGNAL_RECEIVED', waitingToken.token, catchNode, delivery, time, waitingToken);
+          delivered += 1;
+        }
+
+        this.waitingEventTokens.set(catchNode.id, waiting);
+
+        if (delivered) {
           break;
         }
 
-        this.scheduleEventReceived('SIGNAL_RECEIVED', waitingToken.token, catchNode, delivery, time, waitingToken);
-        delivered += 1;
+        continue;
+      }
+
+      while (waiting.length) {
+        const waitingToken = waiting.shift();
+
+        if (waitingToken) {
+          this.scheduleEventReceived('SIGNAL_RECEIVED', waitingToken.token, catchNode, delivery, time, waitingToken);
+          delivered += 1;
+        }
       }
 
       this.waitingEventTokens.set(catchNode.id, waiting);
@@ -1355,6 +1376,12 @@ function normalizeConfig(config: SimulationConfig): SimulationConfig {
     animationSpeed: config.animationSpeed || 1,
     collectTraces: config.collectTraces
   };
+}
+
+function calculateEventLimit(scheduledStarts: number, configuredRuns: number): number {
+  const plannedCases = Math.max(1, scheduledStarts, configuredRuns);
+
+  return Math.min(Number.MAX_SAFE_INTEGER, Math.max(10000, plannedCases * 2500));
 }
 
 function minutesToHours(minutes: number): number {

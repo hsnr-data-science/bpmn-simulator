@@ -11,6 +11,7 @@
   },
   "dependencies": {
     "@bpmn-io/properties-panel": "^3.30.0",
+    "@xmldom/xmldom": "^0.9.10",
     "bpmn-js": "^18.6.1",
     "bpmn-js-properties-panel": "^5.58.0",
     "bpmn-js-token-simulation": "^0.39.3",

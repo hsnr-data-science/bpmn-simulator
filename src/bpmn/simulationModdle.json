@@ -7,6 +7,13 @@
   },
   "types": [
     {
+      "name": "ProcessConfig",
+      "superClass": ["Element"],
+      "properties": [
+        { "name": "startDateTime", "type": "String", "isAttr": true }
+      ]
+    },
+    {
       "name": "TaskConfig",
       "superClass": ["Element"],
       "properties": [

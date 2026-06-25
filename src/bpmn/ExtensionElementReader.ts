@@ -26,6 +26,15 @@ export const TASK_CONFIG_TYPE = 'sim:TaskConfig';
 export const START_EVENT_CONFIG_TYPE = 'sim:StartEventConfig';
 export const SEQUENCE_FLOW_CONFIG_TYPE = 'sim:SequenceFlowConfig';
 export const RESOURCE_CATALOG_TYPE = 'sim:ResourceCatalog';
+export const PROCESS_CONFIG_TYPE = 'sim:ProcessConfig';
+
+export function readProcessConfig(element?: BpmnBusinessObject): { startDateTime?: string } {
+  const config = findExtension(element, PROCESS_CONFIG_TYPE);
+
+  return {
+    startDateTime: asString(readAttribute(config, 'startDateTime'))
+  };
+}
 
 export function readSimulationConfig(element?: BpmnBusinessObject): ElementSimulationConfig {
   if (!element) {

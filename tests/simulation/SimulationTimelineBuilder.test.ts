@@ -61,6 +61,20 @@ test('SimulationTimelineBuilder starts parallel outgoing movements together afte
   assert.ok(Math.abs(startC - incomingEnd) < 1e-9);
 });
 
+test('SimulationTimelineBuilder handles more than 100,000 movement events without overflowing the call stack', () => {
+  const movementFlow = flow('flow', 'task', 'target');
+  const model = createGatewayModel('exclusiveGateway', [movementFlow]);
+  const cases = Array.from({ length: 55_000 }, (_, index): CaseTrace => ({
+    ...caseTrace(['task', 'flow', 'target']),
+    id: index + 1
+  }));
+  const timeline = buildSimulationTimeline(model, [], cases);
+
+  assert.equal(timeline.length, 110_000);
+  assert.equal(timeline[0]?.type, 'TOKEN_MOVE_START');
+  assert.equal(timeline.at(-1)?.type, 'TOKEN_MOVE_END');
+});
+
 function createModel(): SimModel {
   return {
     id: 'process',

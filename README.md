@@ -45,6 +45,7 @@ src/
     BpmnElementClassifier.ts
     ExtensionElementReader.ts
     ExtensionElementWriter.ts
+    QbpSimulationImporter.ts
     demoModels.ts
     simulationModdle.json
   properties/
@@ -243,4 +244,6 @@ Der Dashboard-Tab visualisiert Service- und Wartezeiten für den Gesamtprozess, 
 
 ## Beispielmodell
 
-Die Demo-Auswahl lädt die BPMN-Dateien direkt aus `tests/bpmn`: das einfache Order-Fulfillment-Modell sowie das Messaging-/Signal-Modell mit mehreren Pools und Event-Based Gateway. Das ausgewählte Modell wird über den Demo-Button geladen und kann direkt im Modeler bearbeitet werden.
+Die Demo-Auswahl lädt die BPMN-Dateien direkt aus `tests/bpmn`: das einfache Order-Fulfillment-Modell, das Messaging-/Signal-Modell mit mehreren Pools und Event-Based Gateway sowie das Insurance-Claims-Modell für den QBP-Import. Das ausgewählte Modell wird über den Demo-Button geladen und kann direkt im Modeler bearbeitet werden.
+
+Beim Import eines BIMP/QBP-Modells mit `qbp:processSimulationInfo` werden unterstützte Simulationsdaten automatisch in die nativen `sim:*`-Extension-Elements des Simulators migriert. Übernommen werden Prozessinstanzen und Arrival-Verteilung, Startzeit, Ressourcen und Timetables, Aktivitätsdauern und Ressourcenzuordnungen sowie Sequence-Flow-Wahrscheinlichkeiten. QBP-Kostenparameter werden derzeit nicht simuliert und als Importwarnung angezeigt. Der QBP-Block und sein Namespace werden vor dem bpmn-js-Import entfernt; ein anschließend exportiertes BPMN enthält deshalb ausschließlich die eigenen Simulationsannotationen.

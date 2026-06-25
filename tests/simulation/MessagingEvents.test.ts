@@ -65,6 +65,58 @@ test('DES delivers messages across pools and resumes a waiting catch event', asy
   }
 });
 
+test('DES scales the event safety limit with start-event case counts', async () => {
+  const model = await loadMessagingModel();
+
+  makeMessagingModelDeterministic(model);
+  forceExclusivePath(model, 'Flow_1n6mqny', ['Flow_0jb5mwb', 'Flow_1om6y6c']);
+  setStartCases(model, 300, 0);
+
+  const result = new DesEngine(model, {
+    numberOfRuns: 1,
+    randomSeed: 7,
+    animationSpeed: 1,
+    collectTraces: true
+  }).run();
+
+  assert.equal(result.cases.filter((caseTrace) => caseTrace.processId === 'Process_Order_Fulfillment').length, 300);
+  assert.equal(result.cases.filter((caseTrace) => caseTrace.processId === 'Process_1n5337j').length, 300);
+  assert.equal(result.completedCases, 600);
+  assert.equal(result.deadlockSuspicions, 0);
+  assert.ok(!result.warnings.some((warning) => warning.includes('safety limit')));
+});
+
+test('Correlated message and signal end events match their parent catch event counts', async () => {
+  const model = await loadMessagingModel();
+
+  makeMessagingModelDeterministic(model);
+  setStartCases(model, 20, 0);
+  setExclusiveProbabilities(model, {
+    Flow_1n6mqny: 0.5,
+    Flow_0jb5mwb: 0.5,
+    Flow_1om6y6c: 0
+  });
+
+  const result = new DesEngine(model, {
+    numberOfRuns: 1,
+    randomSeed: 42,
+    animationSpeed: 1,
+    collectTraces: true
+  }).run();
+  const messageEnds = executionCount(result, 'Event_0ao9nup');
+  const signalEnds = executionCount(result, 'Event_1fx2uuo');
+  const messageCatches = executionCount(result, 'Event_1vd2smq');
+  const signalCatches = executionCount(result, 'Event_0rwco36');
+
+  assert.ok(messageEnds > 0);
+  assert.ok(signalEnds > 0);
+  assert.equal(messageEnds, messageCatches);
+  assert.equal(signalEnds, signalCatches);
+  assert.equal(messageEnds + signalEnds, 20);
+  assert.equal(result.completedCases, 40);
+  assert.equal(result.deadlockSuspicions, 0);
+});
+
 test('Messaging playback waits at the event-based gateway and clears the winning catch event', async () => {
   const model = await loadMessagingModel();
 
@@ -404,6 +456,36 @@ function forceExclusivePath(model: SimModel, selectedFlowId: string, otherFlowId
       other.params.branch = { probability: 0 };
     }
   }
+}
+
+function setExclusiveProbabilities(model: SimModel, probabilities: Record<string, number>): void {
+  for (const [flowId, probability] of Object.entries(probabilities)) {
+    const flow = model.flows.get(flowId);
+
+    if (!flow) {
+      throw new Error(`Messaging flow ${flowId} missing`);
+    }
+
+    flow.params.branch = { probability };
+  }
+}
+
+function setStartCases(model: SimModel, numberOfCases: number, interval: number): void {
+  const start = model.nodes.get('StartEvent_Order');
+
+  if (!start) {
+    throw new Error('Messaging start event missing');
+  }
+
+  start.params.arrival = {
+    type: 'fixed',
+    interval,
+    numberOfCases
+  };
+}
+
+function executionCount(result: ReturnType<DesEngine['run']>, elementId: string): number {
+  return result.elementMetrics.find((metric) => metric.elementId === elementId)?.visits ?? 0;
 }
 
 function createExternalEventModel(): SimModel {

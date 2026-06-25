@@ -6,6 +6,7 @@ import { DEMO_MODELS, getDemoModel } from '../bpmn/demoModels';
 import { emptyDiagram } from '../bpmn/emptyDiagram';
 import { readResourceCatalog } from '../bpmn/ExtensionElementReader';
 import { updateResourceCatalog } from '../bpmn/ExtensionElementWriter';
+import { importQbpSimulationInfo } from '../bpmn/QbpSimulationImporter';
 import simulationModdle from '../bpmn/simulationModdle.json';
 import {
   DEFAULT_HOUR_RANGES,
@@ -379,13 +380,34 @@ export class ModelerApp {
     this.dispatchResourceCatalogChanged();
 
     try {
-      await this.modeler.importXML(xml);
+      const qbpImport = importQbpSimulationInfo(xml);
+      const importResult = await this.modeler.importXML(qbpImport.xml);
       this.canvas.zoom('fit-viewport');
       this.selectedTaskId = undefined;
+
+      if (qbpImport.startDateTime) {
+        const importedStart = new Date(qbpImport.startDateTime);
+
+        if (!Number.isNaN(importedStart.getTime())) {
+          this.elements.simulationStartTime.value = formatDateTimeLocal(importedStart);
+        }
+      }
+
       this.renderResources();
       this.updateCurrentSimulationTime();
       this.dispatchResourceCatalogChanged();
-      this.setStatus(successMessage);
+      const importWarnings = [
+        ...qbpImport.warnings,
+        ...importResult.warnings.map(formatImportWarning)
+      ];
+
+      this.warningPanel.render(importWarnings.map((message) => ({
+        level: 'warning',
+        message
+      })));
+      this.setStatus(qbpImport.imported
+        ? `${successMessage}; QBP simulation data imported (${qbpImport.summary.resources} resources, ${qbpImport.summary.taskConfigurations} activities, ${qbpImport.summary.sequenceFlows} flows)`
+        : successMessage);
     } catch (error) {
       this.elements.resourceList.replaceChildren();
       this.dispatchResourceCatalogChanged();
@@ -418,7 +440,7 @@ export class ModelerApp {
         startDateTime: this.elements.simulationStartTime.value,
         endDateTime: this.elements.simulationEndTime.value || undefined,
         animationSpeed,
-        collectTraces: true
+        collectTraces: this.isTokenSimulationActive()
       });
 
       this.lastResult = result;
@@ -1586,6 +1608,18 @@ function formatErrorDetail(error: unknown): { summary: string; message: string }
       message: String(error)
     };
   }
+}
+
+function formatImportWarning(warning: unknown): string {
+  if (warning && typeof warning === 'object') {
+    const message = (warning as { message?: unknown }).message;
+
+    if (typeof message === 'string' && message.trim()) {
+      return message.trim();
+    }
+  }
+
+  return formatErrorDetail(warning).message;
 }
 
 function escapeHtml(value: string): string {
