@@ -50,7 +50,7 @@ import { branchProbabilityEntries } from './entries/BranchProbabilityEntry';
 import { durationDistributionEntries } from './entries/DurationDistributionEntry';
 import { outputObjectEntries } from './entries/OutputObjectEntry';
 import { resourceEntries } from './entries/ResourceEntry';
-import { serviceTaskErrorEntries } from './entries/ServiceTaskErrorEntry';
+import { activityErrorEntries, boundaryErrorEntry } from './entries/ActivityErrorEntry';
 
 type EntryDefinition = {
   id: string;
@@ -65,7 +65,8 @@ type EntryDefinition = {
     | 'durationDistribution'
     | 'arrivalDistribution'
     | 'arrivalCalendar'
-    | 'conditionExpression';
+    | 'conditionExpression'
+    | 'errorType';
   type?: string;
   min?: string;
   max?: string;
@@ -86,6 +87,12 @@ type Group = {
   entries: Entry[];
 };
 
+type RegisteredErrorType = {
+  id: string;
+  name: string;
+  businessObject: BpmnBusinessObject;
+};
+
 type PropertiesPanel = {
   registerProvider(priority: number, provider: SimulationPropertiesProvider): void;
 };
@@ -97,6 +104,7 @@ type CanvasWithRoot = {
 const durationDrafts = new WeakMap<object, DurationConfig>();
 const arrivalDrafts = new WeakMap<object, ArrivalConfig>();
 const outputObjectDrafts = new WeakMap<object, OutputFieldConfig[]>();
+const errorTypeDrafts = new WeakMap<object, string>();
 
 export default class SimulationPropertiesProvider {
   static $inject = ['propertiesPanel'];
@@ -107,11 +115,13 @@ export default class SimulationPropertiesProvider {
 
   getGroups(element: BpmnElement) {
     return (groups: Group[]) => {
+      const isBoundaryEvent = element.businessObject?.$type === 'bpmn:BoundaryEvent';
+
       if (element.businessObject?.$type === 'bpmn:SequenceFlow') {
         addConditionExpressionToDocumentationGroup(groups, element);
       }
 
-      if (!isSimulationEditable(element.businessObject)) {
+      if (!isBoundaryEvent && !isSimulationEditable(element.businessObject)) {
         return groups;
       }
 
@@ -133,14 +143,16 @@ export const SimulationPropertiesProviderModule = {
 
 function createEntries(element: BpmnElement): Entry[] {
   const type = element.businessObject?.$type ?? '';
-  const definitions: EntryDefinition[] = [
-    {
-      id: 'sim-enabled',
-      label: 'Use in DES',
-      path: ['enabled'],
-      control: 'checkbox'
-    }
-  ];
+  const definitions: EntryDefinition[] = type === 'bpmn:BoundaryEvent'
+    ? [boundaryErrorEntry() as EntryDefinition]
+    : [
+        {
+          id: 'sim-enabled',
+          label: 'Use in DES',
+          path: ['enabled'],
+          control: 'checkbox'
+        }
+      ];
 
   if (type === 'bpmn:StartEvent') {
     definitions.push(...startEventEntries());
@@ -161,8 +173,8 @@ function createEntries(element: BpmnElement): Entry[] {
     definitions.push(...(outputObjectEntries() as EntryDefinition[]));
   }
 
-  if (type === 'bpmn:ServiceTask') {
-    definitions.push(...(serviceTaskErrorEntries() as EntryDefinition[]));
+  if (isTaskType(type)) {
+    definitions.push(...(activityErrorEntries() as EntryDefinition[]));
   }
 
   return definitions.map((definition) => createEntry(element, definition));
@@ -180,6 +192,8 @@ function createEntry(element: BpmnElement, definition: EntryDefinition): Entry {
           ? SimulationArrivalCalendar
         : definition.control === 'conditionExpression'
           ? SimulationConditionExpression
+        : definition.control === 'errorType'
+          ? SimulationErrorType
       : definition.control === 'resourceSelect'
       ? SimulationResourceSelect
       : definition.control === 'select'
@@ -210,6 +224,146 @@ function createEntry(element: BpmnElement, definition: EntryDefinition): Entry {
     component,
     isEdited
   };
+}
+
+function SimulationErrorType(props: Entry): unknown {
+  const modeling = useService<Modeling>('modeling');
+  const bpmnFactory = useService<BpmnFactory>('bpmnFactory');
+  const canvas = useService<CanvasWithRoot>('canvas');
+  const draftKey = props.element.businessObject ?? props.element;
+  const root = canvas.getRootElement();
+  const errors = getRegisteredErrorTypes(root.businessObject);
+  const boundaryDefinition = props.element.businessObject?.eventDefinitions?.find((definition) => {
+    return definition.$type === 'bpmn:ErrorEventDefinition';
+  });
+  const selected = props.element.businessObject?.$type === 'bpmn:BoundaryEvent'
+    ? errorTypeName(boundaryDefinition?.errorRef, errors)
+    : readSimulationConfig(props.element.businessObject).error?.possibleErrors?.[0]?.errorCode ?? '';
+
+  const setSelected = (value: string, errorOverride?: BpmnBusinessObject) => {
+    if (props.element.businessObject?.$type === 'bpmn:BoundaryEvent') {
+      const error = errorOverride ?? errors.find((item) => item.name === value || item.id === value)?.businessObject;
+
+      if (boundaryDefinition) {
+        modeling.updateModdleProperties(props.element, boundaryDefinition, {
+          errorRef: error
+        });
+      }
+      return;
+    }
+
+    updateSimulationValue(
+      props.element,
+      'task',
+      ['error', 'possibleErrors'],
+      value ? `${value}:1` : undefined,
+      bpmnFactory,
+      modeling
+    );
+  };
+
+  const createErrorType = () => {
+    const name = (errorTypeDrafts.get(draftKey) ?? '').trim();
+
+    if (!name) {
+      return;
+    }
+
+    const definitions = root.businessObject?.$parent as BpmnBusinessObject | undefined;
+
+    if (!definitions) {
+      return;
+    }
+
+    const existing = getRegisteredErrorTypes(root.businessObject);
+    const existingMatch = existing.find((item) => item.name === name);
+
+    if (existingMatch) {
+      setSelected(existingMatch.name);
+      errorTypeDrafts.delete(draftKey);
+      return;
+    }
+
+    const error = bpmnFactory.create('bpmn:Error', {
+      id: createErrorTypeId(name, existing.map((item) => item.id)),
+      name
+    });
+
+    modeling.updateModdleProperties(root, definitions, {
+      rootElements: [
+        ...((definitions.rootElements as BpmnBusinessObject[] | undefined) ?? []),
+        error
+      ]
+    });
+    setSelected(name, error);
+    errorTypeDrafts.delete(draftKey);
+  };
+
+  return h('div', { id: props.id, class: 'sim-error-type-editor' }, [
+    h('label', { class: 'sim-field-row' }, [
+      h('span', null, props.label),
+      h('select', {
+        value: selected,
+        onChange: (event: Event) => setSelected((event.currentTarget as HTMLSelectElement).value)
+      }, [
+        h('option', { value: '' }, props.element.businessObject?.$type === 'bpmn:BoundaryEvent'
+          ? 'Catch any error'
+          : 'No error type'),
+        ...errors.map((error) => h('option', { value: error.name, key: error.id }, error.name))
+      ])
+    ]),
+    h('div', { class: 'sim-error-type-create' }, [
+      h('input', {
+        type: 'text',
+        value: errorTypeDrafts.get(draftKey) ?? '',
+        placeholder: 'New error type',
+        onInput: (event: Event) => {
+          errorTypeDrafts.set(draftKey, (event.currentTarget as HTMLInputElement).value);
+        }
+      }),
+      h('button', {
+        type: 'button',
+        class: 'bio-properties-panel-button sim-output-add',
+        onClick: createErrorType
+      }, 'Add')
+    ])
+  ]);
+}
+
+function getRegisteredErrorTypes(root: BpmnBusinessObject | undefined): RegisteredErrorType[] {
+  const definitions = root?.$parent as BpmnBusinessObject | undefined;
+
+  return ((definitions?.rootElements as BpmnBusinessObject[] | undefined) ?? [])
+    .filter((element): element is BpmnBusinessObject => element.$type === 'bpmn:Error' && Boolean(element.id))
+    .map((element) => ({
+      id: element.id ?? '',
+      name: element.name ?? element.id ?? '',
+      businessObject: element
+    }));
+}
+
+function errorTypeName(
+  reference: BpmnBusinessObject | string | undefined,
+  errors: RegisteredErrorType[]
+): string {
+  if (typeof reference === 'string') {
+    return errors.find((error) => error.id === reference)?.name ?? reference;
+  }
+
+  return reference?.name ?? reference?.id ?? '';
+}
+
+function createErrorTypeId(name: string, usedIds: string[]): string {
+  const stem = name.replace(/[^A-Za-z0-9_]/g, '_').replace(/^\d/, '_$&') || 'Error';
+  let index = 1;
+  let id = `Error_${stem}`;
+
+  while (usedIds.includes(id)) {
+    index += 1;
+    id = `Error_${stem}_${index}`;
+  }
+
+  return id;
 }
 
 function addConditionExpressionToDocumentationGroup(groups: Group[], element: BpmnElement): void {

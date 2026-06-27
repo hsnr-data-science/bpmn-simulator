@@ -82,8 +82,18 @@ export class BpmnSimulationInterpreter {
     return node.kind === 'endEvent' && !node.parentSubProcessId;
   }
 
+  isTerminateEndEvent(node: SimNode): boolean {
+    return node.kind === 'endEvent' && this.hasEventDefinition(node, 'terminate');
+  }
+
   getSubProcessStarts(node: SimNode): string[] {
     return node.kind === 'subProcess' ? node.subProcessStartIds ?? [] : [];
+  }
+
+  getAttachedBoundaryEvents(activityId: string): SimNode[] {
+    return [...this.model.nodes.values()].filter((node) => {
+      return node.kind === 'boundaryEvent' && node.attachedToRefId === activityId;
+    });
   }
 
   getOutgoingFlowIds(
@@ -92,10 +102,6 @@ export class BpmnSimulationInterpreter {
     log: Logger,
     context: ConditionEvaluationContext = {}
   ): string[] {
-    if (node.kind === 'endEvent' && node.parentSubProcessId) {
-      return this.model.nodes.get(node.parentSubProcessId)?.outgoing ?? [];
-    }
-
     if (node.kind === 'parallelGateway') {
       return [...node.outgoing];
     }

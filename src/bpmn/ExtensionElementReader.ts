@@ -4,7 +4,6 @@ import type {
   DurationConfig,
   ElementSimulationConfig,
   ErrorConfig,
-  FailureConfig,
   OutputFieldConfig,
   OutputObjectConfig,
   PossibleError,
@@ -63,9 +62,11 @@ export function readTaskConfig(element?: BpmnBusinessObject): TaskSimulationConf
     enabled: asBoolean(readAttribute(config, 'enabled')),
     duration: readDuration(findChild(config, 'sim:Duration', 'duration')),
     resource: readResource(findChild(config, 'sim:Resource', 'resource')),
-    failure: readFailure(findChild(config, 'sim:Failure', 'failure')),
     outputObject: readOutputObject(findChild(config, 'sim:OutputObject', 'outputObject')),
-    error: readError(findChild(config, 'sim:ServiceError', 'serviceError'))
+    error: readError(
+      findChild(config, 'sim:ErrorConfig', 'error') ??
+      findChild(config, 'sim:ServiceError', 'serviceError')
+    )
   };
 }
 
@@ -253,18 +254,6 @@ function readCatalogResource(element?: BpmnBusinessObject): SimulationResource |
     capacity: asInteger(readAttribute(element, 'capacity')),
     weekdays: schedule.weekdays,
     hourRanges: schedule.hourRanges
-  };
-}
-
-function readFailure(element?: BpmnBusinessObject): FailureConfig | undefined {
-  if (!element) {
-    return undefined;
-  }
-
-  return {
-    probability: asNumber(readAttribute(element, 'probability')),
-    retryCount: asInteger(readAttribute(element, 'retryCount')),
-    retryDelay: readDuration(findChild(element, 'sim:RetryDelay', 'retryDelay'))
   };
 }
 

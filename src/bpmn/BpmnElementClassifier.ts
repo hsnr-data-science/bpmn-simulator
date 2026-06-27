@@ -58,11 +58,7 @@ export function classifyBpmnElement(element: BpmnBusinessObject): Classification
   }
 
   if (type === 'bpmn:BoundaryEvent') {
-    return {
-      kind: 'boundaryEvent',
-      supported: false,
-      reason: 'Boundary Events sind vorbereitet, aber noch nicht implementiert.'
-    };
+    return { kind: 'boundaryEvent', supported: true };
   }
 
   if (isTimerIntermediateEvent(element)) {

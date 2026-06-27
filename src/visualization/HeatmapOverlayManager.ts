@@ -1,4 +1,9 @@
 import type { SimulationResult } from '../types/simulation';
+import {
+  totalWaitTime,
+  type TimeAccountingMode,
+  waitTimeSamples
+} from '../simulation/TimeAccounting';
 import { TokenOverlayManager } from './TokenOverlayManager';
 
 type Overlays = {
@@ -50,15 +55,19 @@ export class HeatmapOverlayManager {
     this.tokenOverlays.clear();
   }
 
-  render(result: SimulationResult): void {
+  render(
+    result: SimulationResult,
+    mode: TimeAccountingMode = 'includingOffTimetable'
+  ): void {
     this.clear();
 
     const taskMetrics = result.elementMetrics.filter((metric) => isActivityMetric(metric.type));
     const maxAverageWait = taskMetrics.reduce(
-      (maximum, metric) => Math.max(maximum, averageWait(metric)),
+      (maximum, metric) => Math.max(maximum, averageWait(metric, mode)),
       0
     );
-    const caseTotal = Math.max(1, result.options.numberOfRuns, result.cases.length);
+    const rootCaseCount = result.cases.filter((caseTrace) => caseTrace.trigger !== 'subProcess').length;
+    const caseTotal = Math.max(1, result.options.numberOfRuns, rootCaseCount);
     const maxEventGatewayVisits = Math.max(
       ...result.elementMetrics
         .filter((metric) => isEventOrGatewayMetric(metric.type))
@@ -84,7 +93,7 @@ export class HeatmapOverlayManager {
       }
 
       const errorRate = metric.visits ? metric.errors / metric.visits : 0;
-      const avgWait = metric.visits ? metric.waitTime / metric.visits : 0;
+      const avgWait = metric.visits ? totalWaitTime(metric, mode) / metric.visits : 0;
       const waitIntensity = maxAverageWait ? avgWait / maxAverageWait : 0;
 
       if (metric.unsupported) {
@@ -97,7 +106,7 @@ export class HeatmapOverlayManager {
 
       if (isActivityMetric(metric.type)) {
         this.addActivityWaitMarker(metric.elementId, waitIntensity);
-        this.addTaskStatisticsOverlay(metric);
+        this.addTaskStatisticsOverlay(metric, mode);
         this.addTaskErrorOverlay(metric.elementId, metric.errors);
         continue;
       }
@@ -112,9 +121,14 @@ export class HeatmapOverlayManager {
     }
   }
 
-  private addTaskStatisticsOverlay(metric: SimulationResult['elementMetrics'][number]): void {
-    const avgWait = average(metric.waitTimeSamples ?? []);
-    const waitStddev = metric.waitTimeStddev;
+  private addTaskStatisticsOverlay(
+    metric: SimulationResult['elementMetrics'][number],
+    mode: TimeAccountingMode
+  ): void {
+    const avgWait = average(waitTimeSamples(metric, mode));
+    const waitStddev = mode === 'excludingOffTimetable'
+      ? metric.waitTimeStddevExcludingOffTimetable
+      : metric.waitTimeStddev;
     const html = [
       '<div class="des-task-stat-overlay">',
       `<span title="Average wait time">W ${formatDurationMinutes(avgWait)}</span>`,
@@ -220,8 +234,11 @@ export class HeatmapOverlayManager {
   }
 }
 
-function averageWait(metric: { visits: number; waitTime: number }): number {
-  return metric.visits ? metric.waitTime / metric.visits : 0;
+function averageWait(
+  metric: SimulationResult['elementMetrics'][number],
+  mode: TimeAccountingMode
+): number {
+  return metric.visits ? totalWaitTime(metric, mode) / metric.visits : 0;
 }
 
 function isActivityMetric(type: string): boolean {

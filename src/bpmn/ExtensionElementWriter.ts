@@ -19,9 +19,8 @@ type ConfigKind = 'task' | 'startEvent' | 'sequenceFlow';
 const PATH_TYPE_MAP: Record<string, string> = {
   duration: 'sim:Duration',
   resource: 'sim:Resource',
-  failure: 'sim:Failure',
   outputObject: 'sim:OutputObject',
-  retryDelay: 'sim:RetryDelay',
+  error: 'sim:ErrorConfig',
   serviceError: 'sim:ServiceError',
   arrival: 'sim:Arrival',
   branch: 'sim:Branch'
@@ -259,7 +258,7 @@ function setConfigPath(
   }
 
   if (path[0] === 'error' && path[1] === 'possibleErrors') {
-    const error = ensureChild(config, 'serviceError', bpmnFactory);
+    const error = ensureChild(config, 'error', bpmnFactory);
     error.possibleErrors = createWeightedElements(value as string | undefined, 'sim:PossibleError', 'errorCode', bpmnFactory);
     return;
   }
@@ -342,14 +341,6 @@ function createWeightedElements(
 function normalizePath(path: string[]): string[] {
   if (path[0] === 'resource' && path[1] === 'resourceId') {
     return ['resource', 'id'];
-  }
-
-  if (path[0] === 'error') {
-    return ['serviceError', ...path.slice(1)];
-  }
-
-  if (path[0] === 'failure' && path[1] === 'retryDelay') {
-    return ['failure', 'retryDelay', ...path.slice(2)];
   }
 
   return path;

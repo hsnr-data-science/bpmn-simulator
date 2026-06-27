@@ -12,18 +12,26 @@ import {
   DEFAULT_HOUR_RANGES,
   DEFAULT_WEEKDAYS,
   hoursToRanges,
+  nextResourceAvailability,
   normalizeResourceSchedule,
   rangesToHours,
   WEEKDAY_OPTIONS
 } from '../simulation/ResourceCalendar';
 import { SimulationRunner } from '../simulation/SimulationRunner';
-import type { BpmnBusinessObject, BpmnDefinitions, BpmnElement, BpmnFactory, Modeling } from '../types/bpmn';
+import {
+  serviceTimeSamples,
+  totalServiceTime,
+  totalWaitTime,
+  type TimeAccountingMode,
+  waitTimeSamples
+} from '../simulation/TimeAccounting';
+import type { BpmnBusinessObject, BpmnDefinitions, BpmnElement, BpmnFactory, Modeling, SimModel, SimNode } from '../types/bpmn';
 import type { ElementMetrics, ResourceMetrics, SimulationResource, SimulationResult, Weekday } from '../types/simulation';
 import { SimulationPropertiesProviderModule } from '../properties/SimulationPropertiesProvider';
 import { DesTokenSimulationModule } from '../visualization/DesTokenSimulationModule';
 import { DesTokenAnimator } from '../visualization/DesTokenAnimator';
 import { HeatmapOverlayManager } from '../visualization/HeatmapOverlayManager';
-import { SimulationDashboard } from '../visualization/SimulationDashboard';
+import { buildDashboardSeries, SimulationDashboard } from '../visualization/SimulationDashboard';
 import { SimulationLogPanel } from '../visualization/SimulationLogPanel';
 import { TokenOverlayManager } from '../visualization/TokenOverlayManager';
 
@@ -81,9 +89,15 @@ type AppElements = {
   seed: HTMLInputElement;
   simulationStartTime: HTMLInputElement;
   simulationEndTime: HTMLInputElement;
-  simulationCurrentTime: HTMLInputElement;
+  simulationTimeDisplay: HTMLElement;
+  simulationTimeMeta: HTMLElement;
+  simulationTimeProgressFill: HTMLElement;
+  simulationTimeProgressTicks: HTMLElement;
+  simulationTimeStartLabel: HTMLElement;
+  simulationTimeEndLabel: HTMLElement;
   animationSpeed: HTMLInputElement;
   animationSpeedValue: HTMLElement;
+  timeAccountingButtons: HTMLButtonElement[];
   statusLine: HTMLElement;
   metricCompleted: HTMLElement;
   metricFailed: HTMLElement;
@@ -92,8 +106,8 @@ type AppElements = {
   resourceList: HTMLElement;
   bottleneckList: HTMLOListElement;
   pathList: HTMLOListElement;
-  statsTable: HTMLTableSectionElement;
-  resourceStatsTable: HTMLTableSectionElement;
+  statsTable: HTMLElement;
+  resourceStatsTable: HTMLElement;
   eventLogList: HTMLUListElement;
   warningList: HTMLUListElement;
   logList: HTMLUListElement;
@@ -116,6 +130,9 @@ export class ModelerApp {
   private tokenSimulationActive = false;
   private simulationRunId = 0;
   private activeView: 'modeler' | 'dashboard' = 'modeler';
+  private timeAccountingMode: TimeAccountingMode = 'includingOffTimetable';
+  private estimatedSimulationEndTime: number | undefined;
+  private simulationEndTimeExplicit = false;
 
   constructor(root: HTMLElement) {
     this.root = root;
@@ -272,11 +289,24 @@ export class ModelerApp {
       this.tokenAnimator.setSpeed(speed);
     });
 
+    for (const button of this.elements.timeAccountingButtons) {
+      button.addEventListener('click', () => {
+        this.setTimeAccountingMode(
+          button.dataset.timeAccounting === 'excludingOffTimetable'
+            ? 'excludingOffTimetable'
+            : 'includingOffTimetable'
+        );
+      });
+    }
+
     this.elements.simulationStartTime.addEventListener('change', () => {
+      this.estimatedSimulationEndTime = this.estimateCurrentSimulationEndTime();
       this.updateCurrentSimulationTime();
     });
 
     this.elements.simulationEndTime.addEventListener('change', () => {
+      this.simulationEndTimeExplicit = Boolean(this.elements.simulationEndTime.value);
+      this.estimatedSimulationEndTime = this.estimateCurrentSimulationEndTime();
       this.updateCurrentSimulationTime(this.displayedResult ?? this.lastResult);
     });
 
@@ -323,6 +353,8 @@ export class ModelerApp {
         return;
       }
 
+      event.preventDefault();
+      event.stopPropagation();
       const index = Number(button.dataset.index);
       const resources = this.readResourcesFromEditor();
 
@@ -377,6 +409,8 @@ export class ModelerApp {
     this.simulationRunId += 1;
     this.clearSimulationState();
     this.elements.resourceList.replaceChildren();
+    this.elements.simulationEndTime.value = '';
+    this.simulationEndTimeExplicit = false;
     this.dispatchResourceCatalogChanged();
 
     try {
@@ -394,6 +428,7 @@ export class ModelerApp {
       }
 
       this.renderResources();
+      this.estimatedSimulationEndTime = this.estimateCurrentSimulationEndTime();
       this.updateCurrentSimulationTime();
       this.dispatchResourceCatalogChanged();
       const importWarnings = [
@@ -424,12 +459,13 @@ export class ModelerApp {
       const simModel = buildBpmnGraph(definitions as never);
       const animationSpeed = readAnimationSpeed(this.elements.animationSpeed);
       const simulationStart = this.readSimulationStartDate();
-      const simulationEnd = readOptionalDateTimeLocal(this.elements.simulationEndTime);
+      const simulationEnd = this.readExplicitSimulationEndDate();
       const startTime = simulationOffsetHours(simulationStart);
       const maxSimulationTime = simulationEnd && simulationEnd.getTime() > simulationStart.getTime()
         ? startTime + hoursBetween(simulationStart, simulationEnd)
         : undefined;
 
+      this.estimatedSimulationEndTime = estimateSimulationEndTime(simModel, startTime, maxSimulationTime);
       this.updateCurrentSimulationTime();
 
       const result = this.runner.run(simModel, {
@@ -438,7 +474,7 @@ export class ModelerApp {
         maxSimulationTime,
         startTime,
         startDateTime: this.elements.simulationStartTime.value,
-        endDateTime: this.elements.simulationEndTime.value || undefined,
+        endDateTime: simulationEnd ? this.elements.simulationEndTime.value : undefined,
         animationSpeed,
         collectTraces: this.isTokenSimulationActive()
       });
@@ -463,13 +499,13 @@ export class ModelerApp {
           }
 
           if (now - lastOverlayRender >= LIVE_OVERLAY_RENDER_INTERVAL_MS) {
-            this.heatmapOverlays.render(progressResult);
+            this.heatmapOverlays.render(progressResult, this.timeAccountingMode);
             lastOverlayRender = now;
           }
 
           if (now - lastStatusRender >= LIVE_STATUS_RENDER_INTERVAL_MS) {
             this.setStatus(
-              `Token visualization t=${formatDurationHours(currentSimulationTime(progressResult))}, ${progressResult.completedCases}/${result.cases.length} cases`
+              `Token visualization t=${formatDurationHours(currentSimulationTime(progressResult))}, ${progressResult.completedCases}/${rootCaseCount(result)} cases`
             );
             lastStatusRender = now;
           }
@@ -480,13 +516,13 @@ export class ModelerApp {
         }
 
         this.renderResults(result);
-        this.heatmapOverlays.render(result);
+        this.heatmapOverlays.render(result, this.timeAccountingMode);
         this.setStatus(`${result.completedCases} cases completed and visualized`);
         return;
       }
 
       this.renderResults(result);
-      this.heatmapOverlays.render(result);
+      this.heatmapOverlays.render(result, this.timeAccountingMode);
       this.setStatus(`${result.completedCases} cases completed`);
     } catch (error) {
       this.clearSimulationState();
@@ -642,8 +678,12 @@ export class ModelerApp {
       .filter((metric) => metric.visits > 0 && isActivityMetricType(metric.type))
       .map((metric) => ({
         ...metric,
-        avgWait: metric.visits ? metric.waitTime / metric.visits : 0,
-        avgService: metric.completions ? metric.serviceTime / metric.completions : 0
+        avgWait: metric.visits
+          ? totalWaitTime(metric, this.timeAccountingMode) / metric.visits
+          : 0,
+        avgService: metric.completions
+          ? totalServiceTime(metric, this.timeAccountingMode) / metric.completions
+          : 0
       }))
       .sort((a, b) => b.avgWait + b.avgService - (a.avgWait + a.avgService))
       .slice(0, 6);
@@ -680,20 +720,30 @@ export class ModelerApp {
   private renderResourceStats(metrics: ResourceMetrics[]): void {
     this.elements.resourceStatsTable.replaceChildren(
       ...metrics.map((metric) => {
-        const row = document.createElement('tr');
-        const nameCell = document.createElement('td');
-        const valueCell = document.createElement('td');
-        const service = describeSamples(metric.serviceTimeSamples ?? [], formatDurationMinutes);
-        const wait = describeSamples(metric.waitTimeSamples ?? [], formatDurationMinutes);
+        const card = document.createElement('article');
+        const service = describeSamples(
+          serviceTimeSamples(metric, this.timeAccountingMode),
+          formatDurationMinutes
+        );
+        const wait = describeSamples(
+          waitTimeSamples(metric, this.timeAccountingMode),
+          formatDurationMinutes
+        );
 
-        nameCell.textContent = metric.name || metric.resourceId;
-        valueCell.innerHTML = `
-          <strong>${metric.taskCount} tasks, ${metric.errors} errors · Utilization ${formatPercent(metric.utilization ?? 0)}</strong>
-          <small>Service ${formatSampleDescription(service)}<br>Wait ${formatSampleDescription(wait)}</small>
+        card.className = 'sidebar-stat-card';
+        card.innerHTML = `
+          <header>
+            <strong>${escapeHtml(metric.name || metric.resourceId)}</strong>
+            <span>${formatPercent(metric.utilization ?? 0)} utilization</span>
+          </header>
+          ${createStatFactsHtml([
+            ['Tasks', metric.taskCount],
+            ['Errors', metric.errors]
+          ])}
+          ${createTimeStatisticsTable(service, wait)}
         `;
-        row.append(nameCell, valueCell);
 
-        return row;
+        return card;
       })
     );
   }
@@ -702,42 +752,43 @@ export class ModelerApp {
     const selectedTaskMetric = this.selectedTaskId
       ? result.elementMetrics.find((metric) => metric.elementId === this.selectedTaskId)
       : undefined;
-    const rows = this.selectedTaskId
-      ? this.createTaskStatsRows(result, selectedTaskMetric)
-      : createProcessStatsRows(result);
+    const processSeries = buildDashboardSeries(result, this.timeAccountingMode)
+      .filter((series) => series.scope === 'process');
+    const taskName = selectedTaskMetric?.name ??
+      this.getElementLabel(this.selectedTaskId) ??
+      this.selectedTaskId ??
+      'Task';
+    const serviceSamples = selectedTaskMetric
+      ? serviceTimeSamples(selectedTaskMetric, this.timeAccountingMode)
+      : processSeries.flatMap((series) => series.serviceSamples);
+    const waitingSamples = selectedTaskMetric
+      ? waitTimeSamples(selectedTaskMetric, this.timeAccountingMode)
+      : processSeries.flatMap((series) => series.waitSamples);
+    const service = describeSamples(serviceSamples, formatDurationMinutes);
+    const wait = describeSamples(waitingSamples, formatDurationMinutes);
+    const outputVariables = this.selectedTaskId
+      ? collectOutputVariables(result, this.selectedTaskId)
+      : [];
+    const facts: Array<[string, string | number]> = selectedTaskMetric
+      ? [
+          ['Scope', `Task: ${taskName}`],
+          ['Executions', selectedTaskMetric.visits],
+          ['Errors', selectedTaskMetric.errors],
+          ['Outputs', outputVariables.length ? outputVariables.join(', ') : '-']
+        ]
+      : [
+          ['Scope', 'All processes'],
+          ['Instances', result.cases.length],
+          ['Completed', result.completedCases],
+          ['Failed', result.failedCases],
+          ['Avg cycle', formatDurationHours(result.cycleTimeAverage)],
+          ['P90 cycle', formatDurationHours(result.cycleTimeP90)]
+        ];
 
-    this.elements.statsTable.replaceChildren(
-      ...rows.map(([name, value]) => {
-        const row = document.createElement('tr');
-        const nameCell = document.createElement('td');
-        const valueCell = document.createElement('td');
-
-        nameCell.textContent = name;
-        valueCell.textContent = String(value);
-        row.append(nameCell, valueCell);
-
-        return row;
-      })
-    );
-  }
-
-  private createTaskStatsRows(
-    result: SimulationResult,
-    metric: ElementMetrics | undefined
-  ): Array<[string, string | number]> {
-    const taskName = metric?.name ?? this.getElementLabel(this.selectedTaskId) ?? this.selectedTaskId ?? 'Task';
-    const service = describeSamples(metric?.serviceTimeSamples ?? [], formatDurationMinutes);
-    const wait = describeSamples(metric?.waitTimeSamples ?? [], formatDurationMinutes);
-    const outputVariables = this.selectedTaskId ? collectOutputVariables(result, this.selectedTaskId) : [];
-
-    return [
-      ['Scope', `Task: ${taskName}`],
-      ['Executions', metric?.visits ?? 0],
-      ['Service times', formatSampleDescription(service)],
-      ['Wait times', formatSampleDescription(wait)],
-      ['Errors', metric?.errors ?? 0],
-      ['Output variables', outputVariables.length ? outputVariables.join(', ') : '-']
-    ];
+    this.elements.statsTable.innerHTML = `
+      ${createStatFactsHtml(facts)}
+      ${createTimeStatisticsTable(service, wait)}
+    `;
   }
 
   private bindSelection(): void {
@@ -829,6 +880,7 @@ export class ModelerApp {
   private initializeSimulationTimes(): void {
     this.elements.simulationStartTime.value = formatDateTimeLocal(getDefaultSimulationStart());
     this.elements.simulationEndTime.value = '';
+    this.simulationEndTimeExplicit = false;
     this.updateCurrentSimulationTime();
   }
 
@@ -845,17 +897,61 @@ export class ModelerApp {
     return fallback;
   }
 
-  private updateCurrentSimulationTime(result?: SimulationResult): void {
-    const startDate = this.readSimulationStartDate();
+  private estimateCurrentSimulationEndTime(): number | undefined {
+    try {
+      const model = buildBpmnGraph(this.modeler.getDefinitions() as never);
+      const simulationStart = this.readSimulationStartDate();
+      const simulationEnd = this.readExplicitSimulationEndDate();
+      const startTime = simulationOffsetHours(simulationStart);
+      const maxSimulationTime = simulationEnd && simulationEnd.getTime() > simulationStart.getTime()
+        ? startTime + hoursBetween(simulationStart, simulationEnd)
+        : undefined;
 
-    if (!result) {
-      this.elements.simulationCurrentTime.value = formatDateTimeDisplay(startDate);
-      return;
+      return estimateSimulationEndTime(model, startTime, maxSimulationTime);
+    } catch {
+      return undefined;
+    }
+  }
+
+  private readExplicitSimulationEndDate(): Date | undefined {
+    if (!this.simulationEndTimeExplicit) {
+      return undefined;
     }
 
-    const startTime = result.options.startTime ?? simulationOffsetHours(startDate);
-    const elapsed = Math.max(0, currentSimulationTime(result) - startTime);
-    this.elements.simulationCurrentTime.value = formatDateTimeDisplay(addHours(startDate, elapsed));
+    return readOptionalDateTimeLocal(this.elements.simulationEndTime);
+  }
+
+  private updateCurrentSimulationTime(result?: SimulationResult): void {
+    const startDate = this.readSimulationStartDate();
+    const configuredStartTime = result?.options.startTime ?? simulationOffsetHours(startDate);
+    const firstTimelineTime = result?.timeline[0]?.simulationTime;
+    const progressStartTime = firstTimelineTime !== undefined && Number.isFinite(firstTimelineTime)
+      ? firstTimelineTime
+      : configuredStartTime;
+    const currentTime = result ? currentSimulationTime(result) : progressStartTime;
+    const actualLastTime = result?.timeline.at(-1)?.simulationTime;
+    const progressEndTime = Math.max(
+      progressStartTime,
+      currentTime,
+      this.estimatedSimulationEndTime ?? configuredStartTime,
+      actualLastTime ?? Number.NEGATIVE_INFINITY
+    );
+    const elapsedFromConfiguredStart = Math.max(0, currentTime - configuredStartTime);
+    const startLabelElapsed = Math.max(0, progressStartTime - configuredStartTime);
+    const endLabelElapsed = Math.max(0, progressEndTime - configuredStartTime);
+    const range = Math.max(0.000001, progressEndTime - progressStartTime);
+    const progress = Math.max(0, Math.min(1, (currentTime - progressStartTime) / range));
+
+    this.elements.simulationTimeDisplay.textContent = formatDateTimeDisplay(addHours(startDate, elapsedFromConfiguredStart));
+    this.elements.simulationTimeStartLabel.textContent = `Start: ${formatDateTimeDisplay(addHours(startDate, startLabelElapsed))}`;
+    this.elements.simulationTimeEndLabel.textContent = `${this.simulationEndTimeExplicit ? 'End' : 'Estimated end'}: ${formatDateTimeDisplay(addHours(startDate, endLabelElapsed))}`;
+    this.elements.simulationTimeMeta.textContent = result
+      ? `${formatDurationHours(Math.max(0, currentTime - progressStartTime))} of ${formatDurationHours(range)} playback horizon`
+      : 'Estimated horizon from Start Event arrivals plus 20% buffer';
+    this.elements.simulationTimeProgressFill.style.width = `${progress * 100}%`;
+    this.elements.simulationTimeProgressTicks.replaceChildren(
+      ...createProgressTicks(progressStartTime, progressEndTime)
+    );
   }
 
   private getElementLabel(elementId: string | undefined): string | undefined {
@@ -896,9 +992,17 @@ export class ModelerApp {
       seed: getElement('seed'),
       simulationStartTime: getElement('simulation-start-time'),
       simulationEndTime: getElement('simulation-end-time'),
-      simulationCurrentTime: getElement('simulation-current-time'),
+      simulationTimeDisplay: getElement('simulation-time-display'),
+      simulationTimeMeta: getElement('simulation-time-meta'),
+      simulationTimeProgressFill: getElement('simulation-time-progress-fill'),
+      simulationTimeProgressTicks: getElement('simulation-time-progress-ticks'),
+      simulationTimeStartLabel: getElement('simulation-time-start-label'),
+      simulationTimeEndLabel: getElement('simulation-time-end-label'),
       animationSpeed: getElement('animation-speed'),
       animationSpeedValue: getElement('animation-speed-value'),
+      timeAccountingButtons: [
+        ...this.root.querySelectorAll<HTMLButtonElement>('[data-time-accounting]')
+      ],
       statusLine: getElement('status-line'),
       metricCompleted: getElement('metric-completed'),
       metricFailed: getElement('metric-failed'),
@@ -974,6 +1078,26 @@ export class ModelerApp {
   private updateAnimationSpeedLabel(): void {
     this.elements.animationSpeedValue.textContent = `${readAnimationSpeed(this.elements.animationSpeed)}x`;
   }
+
+  private setTimeAccountingMode(mode: TimeAccountingMode): void {
+    this.timeAccountingMode = mode;
+
+    for (const button of this.elements.timeAccountingButtons) {
+      const active = button.dataset.timeAccounting === mode;
+
+      button.classList.toggle('is-active', active);
+      button.setAttribute('aria-pressed', String(active));
+    }
+
+    this.dashboard.setTimeAccountingMode(mode);
+
+    const result = this.displayedResult ?? this.lastResult;
+
+    if (result) {
+      this.renderResults(result);
+      this.heatmapOverlays.render(result, mode);
+    }
+  }
 }
 
 const ANIMATION_SPEEDS = [1, 2, 4, 8, 16, 64, 256, 1024] as const;
@@ -1018,10 +1142,6 @@ function createShellMarkup(): string {
             <span>End Time</span>
             <input id="simulation-end-time" class="datetime-input" type="datetime-local" />
           </label>
-          <label class="datetime-control current-time-control">
-            <span>Sim Time</span>
-            <input id="simulation-current-time" class="datetime-input current-time-input" type="text" readonly />
-          </label>
           <button id="run-simulation" class="primary-button">
             <i data-lucide="play"></i>
             <span>Start</span>
@@ -1056,8 +1176,31 @@ function createShellMarkup(): string {
             <option value="6" label="256x"></option>
             <option value="7" label="1024x"></option>
           </datalist>
+          <div class="time-accounting-control" role="group" aria-label="Time accounting">
+            <button type="button" class="is-active" data-time-accounting="includingOffTimetable" aria-pressed="true">
+              Including off-hours
+            </button>
+            <button type="button" data-time-accounting="excludingOffTimetable" aria-pressed="false">
+              Working hours only
+            </button>
+          </div>
         </div>
       </header>
+      <section class="simulation-timebar" aria-label="Simulation time progress">
+        <div class="simulation-timebar-main">
+          <span class="simulation-timebar-caption">Simulation Time</span>
+          <strong id="simulation-time-display">-</strong>
+          <span id="simulation-time-meta">Estimated horizon from Start Event arrivals</span>
+        </div>
+        <div class="simulation-timebar-track" aria-hidden="true">
+          <div id="simulation-time-progress-fill" class="simulation-timebar-fill"></div>
+          <div id="simulation-time-progress-ticks" class="simulation-timebar-ticks"></div>
+        </div>
+        <div class="simulation-timebar-labels">
+          <span id="simulation-time-start-label">-</span>
+          <span id="simulation-time-end-label">-</span>
+        </div>
+      </section>
       <nav class="view-tabs" role="tablist" aria-label="Application views">
         <button id="modeler-tab" class="view-tab is-active" role="tab" aria-selected="true" aria-controls="workspace">
           <i data-lucide="workflow"></i>
@@ -1133,9 +1276,7 @@ function createShellMarkup(): string {
               <summary class="section-title">
                 <h2>Statistics</h2>
               </summary>
-              <table class="stats-table">
-                <tbody id="stats-table"></tbody>
-              </table>
+              <div id="stats-table" class="sidebar-stat-list"></div>
             </details>
           </section>
           <section class="panel-section collapsible-section">
@@ -1143,9 +1284,7 @@ function createShellMarkup(): string {
               <summary class="section-title">
                 <h2>Resource Utilization</h2>
               </summary>
-              <table class="stats-table resource-stats-table">
-                <tbody id="resource-stats-table"></tbody>
-              </table>
+              <div id="resource-stats-table" class="sidebar-stat-list resource-stats-table"></div>
             </details>
           </section>
           <section class="panel-section collapsible-section">
@@ -1301,17 +1440,136 @@ function currentSimulationTime(result: SimulationResult): number {
   return result.log.reduce((time, entry) => Math.max(time, entry.time ?? 0), 0);
 }
 
-function createProcessStatsRows(result: SimulationResult): Array<[string, string | number]> {
-  return [
-    ['Scope', 'Process'],
-    ['Completed', result.completedCases],
-    ['Failed', result.failedCases],
-    ['Avg cycle time', formatDurationHours(result.cycleTimeAverage)],
-    ['P90 cycle time', formatDurationHours(result.cycleTimeP90)],
-    ['Throughput', formatNumber(result.throughputPerTimeUnit)],
-    ['Deadlock suspicion', result.deadlockSuspicions],
-    ['Unconsumed tokens', result.unconsumedTokens]
-  ];
+function estimateSimulationEndTime(
+  model: SimModel,
+  startTime: number,
+  configuredEndTime?: number
+): number {
+  if (configuredEndTime !== undefined && Number.isFinite(configuredEndTime)) {
+    return Math.max(startTime, configuredEndTime);
+  }
+
+  const windows = model.startNodeIds
+    .map((startNodeId) => model.nodes.get(startNodeId))
+    .filter((node): node is SimNode => Boolean(node))
+    .map((startNode) => estimateStartEventArrivalWindow(startNode, startTime))
+    .filter((window): window is { first: number; last: number } => Boolean(window));
+
+  if (!windows.length) {
+    return startTime;
+  }
+
+  const first = Math.min(...windows.map((window) => window.first));
+  const last = Math.max(...windows.map((window) => window.last));
+  const span = Math.max(0, last - first);
+
+  return first + span * 1.2;
+}
+
+function estimateStartEventArrivalWindow(
+  startNode: SimNode,
+  startTime: number
+): { first: number; last: number } | undefined {
+  const arrival = startNode.params.arrival;
+  const eventTriggered = startNode.eventDefinitions?.some((definition) => {
+    return definition.type === 'message' || definition.type === 'signal' || definition.type === 'timer';
+  }) ?? false;
+
+  if (
+    startNode.kind !== 'startEvent' ||
+    startNode.params.enabled === false ||
+    arrival?.type === 'none' ||
+    (eventTriggered && !arrival)
+  ) {
+    return undefined;
+  }
+
+  const numberOfCases = Math.max(1, Math.floor(arrival?.numberOfCases ?? 1));
+  let first = nextResourceAvailability(normalizeResourceSchedule(arrival ?? {}, 'businessHours'), startTime);
+  let last = first;
+
+  for (let index = 1; index < numberOfCases; index += 1) {
+    last = nextResourceAvailability(
+      normalizeResourceSchedule(arrival ?? {}, 'businessHours'),
+      last + arrivalDelayEstimateHours(arrival)
+    );
+  }
+
+  return {
+    first,
+    last
+  };
+}
+
+function arrivalDelayEstimateHours(arrival: SimNode['params']['arrival']): number {
+  if (!arrival || arrival.type === 'none') {
+    return 0;
+  }
+
+  if (arrival.type === 'fixed') {
+    return minutesToHours(arrival.interval ?? arrival.mean ?? 1);
+  }
+
+  return minutesToHours(arrival.mean ?? arrival.interval ?? 1);
+}
+
+function createProgressTicks(startTime: number, endTime: number): HTMLElement[] {
+  const duration = Math.max(0, endTime - startTime);
+
+  if (duration <= 0) {
+    return [];
+  }
+
+  const step = chooseProgressTickStep(duration);
+  const ticks: HTMLElement[] = [];
+  let offset = 0;
+
+  while (offset <= duration + 1e-9) {
+    ticks.push(createProgressTick(offset / duration, formatProgressTickLabel(offset, duration)));
+    offset += step;
+  }
+
+  if (!ticks.length || Math.abs((offset - step) - duration) > step * 0.35) {
+    ticks.push(createProgressTick(1, formatProgressTickLabel(duration, duration)));
+  }
+
+  return ticks;
+}
+
+function createProgressTick(position: number, label: string): HTMLElement {
+  const tick = document.createElement('span');
+
+  tick.className = 'simulation-timebar-tick';
+  tick.style.left = `${Math.max(0, Math.min(1, position)) * 100}%`;
+  tick.textContent = label;
+
+  return tick;
+}
+
+function chooseProgressTickStep(durationHours: number): number {
+  const candidates = durationHours <= 72
+    ? [1, 2, 4, 6, 8, 12, 24]
+    : [24, 48, 72, 168, 336, 720];
+
+  return candidates.find((candidate) => durationHours / candidate <= 8) ?? candidates.at(-1) ?? 24;
+}
+
+function formatProgressTickLabel(offsetHours: number, durationHours: number): string {
+  if (durationHours <= 72) {
+    return formatDurationHours(offsetHours);
+  }
+
+  const days = Math.round(offsetHours / 24);
+
+  return `${days}d`;
+}
+
+function minutesToHours(minutes: number): number {
+  return Math.max(0, minutes) / 60;
+}
+
+function rootCaseCount(result: SimulationResult): number {
+  return result.cases.filter((caseTrace) => caseTrace.trigger !== 'subProcess').length;
 }
 
 function collectOutputVariables(result: SimulationResult, elementId: string): string[] {
@@ -1359,8 +1617,50 @@ function describeSamples(
   };
 }
 
-function formatSampleDescription(samples: Record<'min' | 'max' | 'median' | 'avg', string>): string {
-  return `Min ${samples.min} Max ${samples.max} Median ${samples.median} Avg ${samples.avg}`;
+function createStatFactsHtml(facts: Array<[string, string | number]>): string {
+  return `
+    <dl class="stat-facts">
+      ${facts.map(([label, value]) => `
+        <div>
+          <dt>${escapeHtml(label)}</dt>
+          <dd>${escapeHtml(String(value))}</dd>
+        </div>
+      `).join('')}
+    </dl>
+  `;
+}
+
+function createTimeStatisticsTable(
+  service: Record<'min' | 'max' | 'median' | 'avg', string>,
+  wait: Record<'min' | 'max' | 'median' | 'avg', string>
+): string {
+  const rows: Array<[string, keyof typeof service]> = [
+    ['Min', 'min'],
+    ['Max', 'max'],
+    ['Average', 'avg'],
+    ['Median', 'median']
+  ];
+
+  return `
+    <table class="time-stat-table">
+      <thead>
+        <tr>
+          <th>Statistic</th>
+          <th>Service</th>
+          <th>Waiting</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${rows.map(([label, key]) => `
+          <tr>
+            <th>${label}</th>
+            <td>${service[key]}</td>
+            <td>${wait[key]}</td>
+          </tr>
+        `).join('')}
+      </tbody>
+    </table>
+  `;
 }
 
 function median(sortedValues: number[]): number {
@@ -1444,40 +1744,42 @@ function isActivityMetricType(type: string): boolean {
 }
 
 function createResourceRow(resource: SimulationResource, index: number): HTMLElement {
-  const row = document.createElement('article');
+  const row = document.createElement('details');
   const schedule = normalizeResourceSchedule(resource, 'businessHours');
 
   row.className = 'resource-row';
   row.dataset.index = String(index);
   row.innerHTML = `
-    <div class="resource-row-header">
+    <summary class="resource-row-header">
       <strong>${escapeHtml(resource.name || resource.id)}</strong>
       <button class="icon-button compact-button" type="button" title="Remove resource" aria-label="Remove resource" data-action="remove-resource" data-index="${index}">
         <i data-lucide="trash-2"></i>
       </button>
-    </div>
-    <label>
-      <span>ID</span>
-      <input data-field="id" type="text" value="${escapeHtml(resource.id)}" />
-    </label>
-    <label>
-      <span>Name</span>
-      <input data-field="name" type="text" value="${escapeHtml(resource.name)}" />
-    </label>
-    <label>
-      <span>Capacity</span>
-      <input data-field="capacity" type="number" min="1" step="1" value="${resource.capacity ?? 1}" />
-    </label>
-    <div class="resource-calendar-block">
-      <span>Days</span>
-      <div class="weekday-selector">
-        ${createWeekdaySelector(schedule.weekdays)}
+    </summary>
+    <div class="resource-row-body">
+      <label>
+        <span>ID</span>
+        <input data-field="id" type="text" value="${escapeHtml(resource.id)}" />
+      </label>
+      <label>
+        <span>Name</span>
+        <input data-field="name" type="text" value="${escapeHtml(resource.name)}" />
+      </label>
+      <label>
+        <span>Capacity</span>
+        <input data-field="capacity" type="number" min="1" step="1" value="${resource.capacity ?? 1}" />
+      </label>
+      <div class="resource-calendar-block">
+        <span>Days</span>
+        <div class="weekday-selector">
+          ${createWeekdaySelector(schedule.weekdays)}
+        </div>
       </div>
-    </div>
-    <div class="resource-calendar-block">
-      <span>Hours</span>
-      <div class="hour-selector">
-        ${createHourSelector(schedule.hourRanges)}
+      <div class="resource-calendar-block">
+        <span>Hours</span>
+        <div class="hour-selector">
+          ${createHourSelector(schedule.hourRanges)}
+        </div>
       </div>
     </div>
   `;

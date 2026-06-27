@@ -33,9 +33,6 @@ export const defaultDiagram = `<?xml version="1.0" encoding="UTF-8"?>
             <sim:outputField key="priority" type="int" generator="randomChoice" choices="1:0.2|2:0.5|3:0.3" />
             <sim:outputField key="reviewerNote" type="string" generator="categorical" choices="ok:0.8|manual_check:0.2" />
           </sim:outputObject>
-          <sim:failure probability="0.02" retryCount="1">
-            <sim:retryDelay type="fixed" mean="1" />
-          </sim:failure>
         </sim:taskConfig>
       </bpmn:extensionElements>
       <bpmn:incoming>Flow_Start_Check</bpmn:incoming>
@@ -55,9 +52,6 @@ export const defaultDiagram = `<?xml version="1.0" encoding="UTF-8"?>
             <sim:outputField key="packageWeight" type="float" generator="normal" mean="4.5" stddev="1.1" min="0.5" />
             <sim:outputField key="trackingCode" type="string" generator="random" length="10" />
           </sim:outputObject>
-          <sim:failure probability="0.03" retryCount="2">
-            <sim:retryDelay type="fixed" mean="2" />
-          </sim:failure>
           <sim:serviceError probability="0.02">
             <sim:possibleError errorCode="PICKING_ERROR" probability="0.6" />
             <sim:possibleError errorCode="PACKING_ERROR" probability="0.4" />
@@ -72,7 +66,6 @@ export const defaultDiagram = `<?xml version="1.0" encoding="UTF-8"?>
         <sim:taskConfig>
           <sim:duration type="uniform" min="12" max="36" />
           <sim:resource id="Procurement" />
-          <sim:failure probability="0.01" retryCount="0" />
         </sim:taskConfig>
       </bpmn:extensionElements>
       <bpmn:incoming>Flow_Stock_No</bpmn:incoming>
@@ -83,9 +76,6 @@ export const defaultDiagram = `<?xml version="1.0" encoding="UTF-8"?>
         <sim:taskConfig>
           <sim:duration type="triangular" min="3" mode="5" max="12" />
           <sim:resource id="Shipping" />
-          <sim:failure probability="0.02" retryCount="1">
-            <sim:retryDelay type="fixed" mean="2" />
-          </sim:failure>
           <sim:serviceError probability="0.01">
             <sim:possibleError errorCode="SHIPMENT_ERROR" probability="1" />
           </sim:serviceError>

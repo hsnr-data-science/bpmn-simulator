@@ -10,7 +10,12 @@ import { BpmnSimulationInterpreter } from './BpmnSimulationInterpreter';
 import { EventQueue } from './EventQueue';
 import { sampleOutputObject } from './OutputObjects';
 import { bernoulli, pickWeighted, sampleDuration, SeededRandom } from './RandomDistributions';
-import { addWorkingTime, nextResourceAvailability, normalizeResourceSchedule } from './ResourceCalendar';
+import {
+  addWorkingTime,
+  nextResourceAvailability,
+  normalizeResourceSchedule,
+  workingTimeBetween
+} from './ResourceCalendar';
 import { ResourceManager, type QueuedTask } from './ResourceManager';
 import { SimulationClock } from './SimulationClock';
 import { StatisticsCollector } from './StatisticsCollector';
@@ -49,12 +54,12 @@ type TaskStartPayload = ElementTokenPayload & {
 
 type TaskCompletePayload = ElementTokenPayload & {
   serviceTime: number;
+  serviceTimeExcludingOffTimetable: number;
   resourceId?: string;
 };
 
 type TaskFailedPayload = ElementTokenPayload & {
   errorCode?: string;
-  serviceError?: boolean;
 };
 
 type EventReceivedPayload = ElementTokenPayload & {
@@ -79,13 +84,15 @@ type EventBasedGatewayRace = {
   active: boolean;
 };
 
-type TaskFailureOutcome =
-  | 'retry'
-  | {
-      errorCode: string;
-      serviceError: boolean;
-    }
-  | undefined;
+type TaskFailureOutcome = {
+  errorCode: string;
+} | undefined;
+
+type EmbeddedSubProcessInstance = {
+  parentCaseId: number;
+  parentToken: Token;
+  subProcessId: string;
+};
 
 export class DesEngine {
   private readonly model: SimModel;
@@ -101,6 +108,8 @@ export class DesEngine {
   private readonly pendingMessagesByTarget = new Map<string, EventDelivery[]>();
   private readonly pendingMessagesByKey = new Map<string, EventDelivery[]>();
   private readonly eventBasedGatewayRaces = new Map<string, EventBasedGatewayRace>();
+  private readonly embeddedSubProcesses = new Map<number, EmbeddedSubProcessInstance>();
+  private readonly unsupportedTimerWarnings = new Set<string>();
   private nextCaseId = 1;
 
   constructor(model: SimModel, options: SimulationConfig) {
@@ -159,6 +168,10 @@ export class DesEngine {
   }
 
   private dispatch(event: SimulationEvent): void {
+    if (this.isClosedCaseEvent(event)) {
+      return;
+    }
+
     if (this.isInactiveEventBasedGatewayEvent(event)) {
       return;
     }
@@ -192,11 +205,11 @@ export class DesEngine {
       case 'PROCESS_INSTANCE_COMPLETE':
         this.completeProcessInstance(event.payload as ElementTokenPayload, event.time);
         break;
+      case 'PROCESS_INSTANCE_TERMINATED':
+        this.terminateProcessInstance(event.payload as ElementTokenPayload, event.time);
+        break;
       case 'TASK_FAILED':
         this.failTask(event.payload as TaskFailedPayload, event.time);
-        break;
-      case 'RETRY_TASK':
-        this.retryTask((event.payload as TokenPayload).token, event.time);
         break;
       case 'MESSAGE_RECEIVED':
         this.receiveMessage(event.payload as EventReceivedPayload, event.time);
@@ -205,6 +218,16 @@ export class DesEngine {
         this.receiveSignal(event.payload as EventReceivedPayload, event.time);
         break;
     }
+  }
+
+  private isClosedCaseEvent(event: SimulationEvent): boolean {
+    if (event.type === 'CASE_ARRIVAL' || event.type === 'EXTERNAL_EVENT_OCCURRED') {
+      return false;
+    }
+
+    const token = (event.payload as Partial<TokenPayload> | undefined)?.token;
+
+    return Boolean(token && !this.tokens.isOpen(token.caseId) && event.type !== 'TASK_FAILED');
   }
 
   private isInactiveEventBasedGatewayEvent(event: SimulationEvent): boolean {
@@ -450,15 +473,8 @@ export class DesEngine {
       return;
     }
 
-    const subProcessStartIds = this.interpreter.getSubProcessStarts(node);
-
-    if (subProcessStartIds.length) {
-      for (const startId of subProcessStartIds) {
-        this.scheduleEnter(this.tokens.createToken(token.caseId, startId), time, true);
-      }
-
-      this.statistics.recordCompletion(node);
-      this.tokens.consume(token.caseId, time);
+    if (node.kind === 'subProcess') {
+      this.startEmbeddedSubProcess(node, token, time);
       return;
     }
 
@@ -495,14 +511,27 @@ export class DesEngine {
     }
 
     if (this.interpreter.isTimer(node)) {
-      this.queue.schedule('TIMER_FIRED', time + minutesToHours(sampleDuration(node.params.duration, this.random)), {
-        token,
-        elementId: node.id
-      });
+      const delay = this.getTimerDelay(node, time);
+
+      if (delay !== undefined) {
+        this.queue.schedule('TIMER_FIRED', time + delay, {
+          token,
+          elementId: node.id
+        });
+      }
+
       return;
     }
 
-    if (this.interpreter.isRootEndEvent(node)) {
+    if (node.kind === 'endEvent') {
+      if (this.interpreter.isTerminateEndEvent(node)) {
+        this.queue.schedule('PROCESS_INSTANCE_TERMINATED', time, {
+          token,
+          elementId: node.id
+        });
+        return;
+      }
+
       this.queue.schedule('PROCESS_INSTANCE_COMPLETE', time, {
         token,
         elementId: node.id
@@ -514,6 +543,55 @@ export class DesEngine {
       token,
       elementId: node.id
     });
+  }
+
+  private startEmbeddedSubProcess(node: SimNode, parentToken: Token, time: number): void {
+    const startIds = this.interpreter.getSubProcessStarts(node);
+    const parentCase = this.tokens.getCase(parentToken.caseId);
+
+    if (!startIds.length || !parentCase) {
+      this.statistics.warn(
+        `Subprocess "${node.name}" has no embedded start event and is skipped.`,
+        node.id,
+        time
+      );
+      this.queue.schedule('TOKEN_LEAVE_ELEMENT', time, {
+        token: parentToken,
+        elementId: node.id
+      });
+      return;
+    }
+
+    const childCaseId = this.allocateCaseId();
+
+    this.embeddedSubProcesses.set(childCaseId, {
+      parentCaseId: parentToken.caseId,
+      parentToken,
+      subProcessId: node.id
+    });
+    this.queue.schedule('CASE_ARRIVAL', time, {
+      caseId: childCaseId,
+      startNodeId: startIds[0],
+      processId: parentCase.processId,
+      trigger: 'subProcess',
+      sourceCaseId: parentToken.caseId,
+      triggerElementId: node.id,
+      variables: parentCase.outputs
+    });
+
+    if (startIds.length > 1) {
+      this.statistics.warn(
+        `Subprocess "${node.name}" has multiple start events; only the first start event is used.`,
+        node.id,
+        time
+      );
+    }
+
+    this.statistics.info(
+      `Subprocess "${node.name}" started as child case ${childCaseId} of case ${parentToken.caseId}.`,
+      node.id,
+      time
+    );
   }
 
   private enterJoinGateway(token: Token, node: SimNode, time: number): void {
@@ -573,8 +651,13 @@ export class DesEngine {
       }
 
       if (this.interpreter.isTimer(target)) {
-        this.queue.schedule('TIMER_FIRED', time + minutesToHours(sampleDuration(target.params.duration, this.random)), candidatePayload);
-        candidates += 1;
+        const delay = this.getTimerDelay(target, time);
+
+        if (delay !== undefined) {
+          this.queue.schedule('TIMER_FIRED', time + delay, candidatePayload);
+          candidates += 1;
+        }
+
         continue;
       }
 
@@ -661,37 +744,13 @@ export class DesEngine {
       this.startQueuedTask(queued, time);
     }
 
-    const failure = this.sampleFailure(node, payload.token);
-
-    if (failure === 'retry') {
-      const retryToken = {
-        ...payload.token,
-        attempt: payload.token.attempt + 1
-      };
-      const delay = minutesToHours(sampleDuration(node.params.failure?.retryDelay, this.random));
-
-      this.tokens.incrementRetries(payload.token.caseId);
-      this.statistics.recordRetry(node);
-      this.queue.schedule('RETRY_TASK', time + delay, {
-        token: retryToken
-      });
-      return;
-    }
+    const failure = this.sampleFailure(node);
 
     if (failure) {
-      if (failure.serviceError) {
-        this.statistics.warn(
-          `Service Task "${node.name}" erzeugte Fehler "${failure.errorCode}". Boundary Error Events sind noch nicht implementiert; der Task wird als fehlgeschlagen markiert.`,
-          node.id,
-          time
-        );
-      }
-
       this.queue.schedule('TASK_FAILED', time, {
         token: payload.token,
         elementId: node.id,
-        errorCode: failure.errorCode,
-        serviceError: failure.serviceError
+        errorCode: failure.errorCode
       });
       return;
     }
@@ -715,17 +774,103 @@ export class DesEngine {
 
     if (node) {
       this.statistics.recordError(node);
+
+      if (this.routeActivityError(node, payload.token, payload.errorCode, time)) {
+        return;
+      }
     }
 
     this.tokens.fail(payload.token.caseId, payload.errorCode, time);
   }
 
-  private retryTask(token: Token, time: number): void {
-    this.queue.schedule('TASK_START', time, {
-      token,
-      elementId: token.elementId,
-      arrivedAt: time
+  private routeActivityError(
+    node: SimNode,
+    token: Token,
+    errorCode: string | undefined,
+    time: number
+  ): boolean {
+    const boundary = this.findMatchingBoundaryEvent(node.id, errorCode);
+
+    if (boundary) {
+      this.routeToBoundaryEvent(boundary, token, errorCode, time);
+      return true;
+    }
+
+    if (node.parentSubProcessId) {
+      return this.bubbleSubProcessError(token.caseId, node.parentSubProcessId, errorCode, time);
+    }
+
+    return false;
+  }
+
+  private bubbleSubProcessError(
+    childCaseId: number,
+    subProcessId: string,
+    errorCode: string | undefined,
+    time: number
+  ): boolean {
+    const instance = this.embeddedSubProcesses.get(childCaseId);
+    const subProcess = this.interpreter.getNode(subProcessId);
+
+    if (!instance || !subProcess) {
+      return false;
+    }
+
+    this.tokens.abort(childCaseId, errorCode, time);
+    this.embeddedSubProcesses.delete(childCaseId);
+    this.statistics.recordError(subProcess);
+
+    const boundary = this.findMatchingBoundaryEvent(subProcess.id, errorCode);
+
+    if (!boundary) {
+      this.statistics.warn(
+        `Error "${errorCode ?? 'unknown'}" from subprocess "${subProcess.name}" has no matching Boundary Error Event.`,
+        subProcess.id,
+        time
+      );
+      this.tokens.fail(instance.parentCaseId, errorCode, time);
+      return true;
+    }
+
+    this.routeToBoundaryEvent(boundary, instance.parentToken, errorCode, time);
+    return true;
+  }
+
+  private findMatchingBoundaryEvent(
+    activityId: string,
+    errorCode: string | undefined
+  ): SimNode | undefined {
+    const boundaries = this.interpreter.getAttachedBoundaryEvents(activityId);
+
+    return boundaries.find((boundary) => {
+      const errors = this.interpreter.getEventDefinitions(boundary, 'error');
+
+      if (!errors.length) {
+        return true;
+      }
+
+      return errors.some((definition) => eventDefinitionKeys(
+        definition,
+        this.interpreter.getEventKey(definition)
+      ).includes(errorCode ?? ''));
     });
+  }
+
+  private routeToBoundaryEvent(
+    boundary: SimNode,
+    token: Token,
+    errorCode: string | undefined,
+    time: number
+  ): void {
+    this.statistics.info(
+      `Error "${errorCode ?? 'unknown'}" is caught by Boundary Event "${boundary.name}".`,
+      boundary.id,
+      time
+    );
+    this.scheduleEnter({
+      ...token,
+      elementId: boundary.id
+    }, time, false);
   }
 
   private waitForMessageOrSignal(token: Token, node: SimNode, time: number): void {
@@ -929,7 +1074,7 @@ export class DesEngine {
       const waiting = this.waitingEventTokens.get(catchNode.id) ?? [];
 
       if (correlatedParentCaseId !== undefined) {
-        const waitingToken = shiftMatchingWaitingToken(waiting, delivery);
+        const waitingToken = this.shiftMatchingWaitingToken(waiting, delivery);
 
         if (waitingToken) {
           this.scheduleEventReceived('SIGNAL_RECEIVED', waitingToken.token, catchNode, delivery, time, waitingToken);
@@ -992,7 +1137,7 @@ export class DesEngine {
 
     if (this.interpreter.isCatchingMessageOrSignalEvent(targetNode)) {
       const waiting = this.waitingEventTokens.get(targetNode.id) ?? [];
-      const waitingPayload = shiftMatchingWaitingToken(waiting, delivery);
+      const waitingPayload = this.shiftMatchingWaitingToken(waiting, delivery);
 
       this.waitingEventTokens.set(targetNode.id, waiting);
 
@@ -1032,7 +1177,7 @@ export class DesEngine {
 
     for (const catchNode of matchingCatches) {
       const waiting = this.waitingEventTokens.get(catchNode.id) ?? [];
-      const waitingPayload = shiftMatchingWaitingToken(waiting, delivery);
+      const waitingPayload = this.shiftMatchingWaitingToken(waiting, delivery);
 
       this.waitingEventTokens.set(catchNode.id, waiting);
 
@@ -1083,6 +1228,30 @@ export class DesEngine {
     };
   }
 
+  private getTimerDelay(node: SimNode, time: number): number | undefined {
+    const timer = this.interpreter.getEventDefinitions(node, 'timer')[0];
+
+    if (timer?.timerDurationMinutes !== undefined) {
+      return minutesToHours(timer.timerDurationMinutes);
+    }
+
+    if (timer?.timerExpression) {
+      if (!this.unsupportedTimerWarnings.has(node.id)) {
+        this.unsupportedTimerWarnings.add(node.id);
+        this.statistics.warn(
+          `Timer "${node.name}" uses unsupported expression "${timer.timerExpression}". ` +
+          'Only ISO-8601 durations (for example PT60M or P14D) and duration-based cycles (for example R3/PT60M) are supported.',
+          node.id,
+          time
+        );
+      }
+
+      return undefined;
+    }
+
+    return minutesToHours(sampleDuration(node.params.duration, this.random));
+  }
+
   private enqueueWaitingToken(elementId: string, payload: ElementTokenPayload): void {
     const waiting = this.waitingEventTokens.get(elementId) ?? [];
 
@@ -1092,7 +1261,7 @@ export class DesEngine {
 
   private shiftPendingMessage(targetId: string, eventKey: string, targetCaseId: number): EventDelivery | undefined {
     const targeted = this.pendingMessagesByTarget.get(targetId);
-    const targetedDelivery = shiftMatchingDelivery(targeted, targetCaseId);
+    const targetedDelivery = this.shiftMatchingDelivery(targeted, targetCaseId);
 
     if (targetedDelivery) {
       return targetedDelivery;
@@ -1100,7 +1269,45 @@ export class DesEngine {
 
     const keyed = this.pendingMessagesByKey.get(eventKey);
 
-    return shiftMatchingDelivery(keyed, targetCaseId);
+    return this.shiftMatchingDelivery(keyed, targetCaseId);
+  }
+
+  private shiftMatchingWaitingToken(
+    waiting: ElementTokenPayload[],
+    delivery: EventDelivery
+  ): ElementTokenPayload | undefined {
+    const index = waiting.findIndex((payload) => this.deliveryMatchesCase(delivery, payload.token.caseId));
+
+    if (index < 0) {
+      return undefined;
+    }
+
+    return waiting.splice(index, 1)[0];
+  }
+
+  private shiftMatchingDelivery(
+    deliveries: EventDelivery[] | undefined,
+    targetCaseId: number
+  ): EventDelivery | undefined {
+    if (!deliveries?.length) {
+      return undefined;
+    }
+
+    const index = deliveries.findIndex((delivery) => this.deliveryMatchesCase(delivery, targetCaseId));
+
+    if (index < 0) {
+      return undefined;
+    }
+
+    return deliveries.splice(index, 1)[0];
+  }
+
+  private deliveryMatchesCase(delivery: EventDelivery, targetCaseId: number): boolean {
+    return deliveryMatchesCase(
+      delivery,
+      targetCaseId,
+      this.tokens.getCase(targetCaseId)?.parentCaseId
+    );
   }
 
   private enqueuePendingMessageByTarget(targetId: string, delivery: EventDelivery): void {
@@ -1144,6 +1351,12 @@ export class DesEngine {
       return;
     }
 
+    if (node.kind === 'endEvent' && node.parentSubProcessId) {
+      this.tokens.consume(payload.token.caseId, time);
+      this.completeEmbeddedSubProcess(payload.token.caseId, time);
+      return;
+    }
+
     this.routeOutgoing(payload.token, node, time);
 
     if (!node.outgoing.length && node.kind !== 'endEvent') {
@@ -1151,6 +1364,43 @@ export class DesEngine {
     }
 
     this.tokens.consume(payload.token.caseId, time);
+  }
+
+  private completeEmbeddedSubProcess(childCaseId: number, time: number): void {
+    const childCase = this.tokens.getCase(childCaseId);
+    const instance = this.embeddedSubProcesses.get(childCaseId);
+
+    if (!childCase || childCase.endTime === undefined || !instance) {
+      return;
+    }
+
+    const parentOutputs = { ...childCase.outputs };
+
+    delete parentOutputs.parentCaseId;
+    this.tokens.mergeOutputs(instance.parentCaseId, parentOutputs);
+    this.embeddedSubProcesses.delete(childCaseId);
+
+    const subProcess = this.interpreter.getNode(instance.subProcessId);
+
+    if (subProcess) {
+      this.statistics.recordCompletion(subProcess);
+      this.statistics.updateLastEventVariables(
+        instance.parentCaseId,
+        subProcess.id,
+        'TOKEN_ENTER_ELEMENT',
+        this.tokens.getCase(instance.parentCaseId)?.outputs
+      );
+    }
+
+    this.statistics.info(
+      `Subprocess "${subProcess?.name ?? instance.subProcessId}" completed; child case ${childCaseId} returned variables to case ${instance.parentCaseId}.`,
+      instance.subProcessId,
+      time
+    );
+    this.queue.schedule('TOKEN_LEAVE_ELEMENT', time, {
+      token: instance.parentToken,
+      elementId: instance.subProcessId
+    });
   }
 
   private completeProcessInstance(payload: ElementTokenPayload, time: number): void {
@@ -1161,6 +1411,33 @@ export class DesEngine {
     }
 
     this.queue.schedule('TOKEN_LEAVE_ELEMENT', time, payload);
+  }
+
+  private terminateProcessInstance(payload: ElementTokenPayload, time: number): void {
+    const node = this.interpreter.getNode(payload.elementId);
+
+    if (node) {
+      this.statistics.recordCompletion(node);
+    }
+
+    this.tokens.terminate(payload.token.caseId, time);
+    this.removeWaitingTokensForCase(payload.token.caseId);
+
+    if (node?.parentSubProcessId) {
+      this.completeEmbeddedSubProcess(payload.token.caseId, time);
+    }
+  }
+
+  private removeWaitingTokensForCase(caseId: number): void {
+    for (const [elementId, waiting] of this.waitingEventTokens.entries()) {
+      const remaining = waiting.filter((payload) => payload.token.caseId !== caseId);
+
+      if (remaining.length) {
+        this.waitingEventTokens.set(elementId, remaining);
+      } else {
+        this.waitingEventTokens.delete(elementId);
+      }
+    }
   }
 
   private routeOutgoing(token: Token, node: SimNode, time: number): void {
@@ -1209,21 +1486,35 @@ export class DesEngine {
     time: number,
     resourceId?: string
   ): void {
-    const serviceTime = sampleDuration(node.params.duration, this.random);
-    const completionTime = addWorkingTime(time, minutesToHours(serviceTime), node.params.resource);
-
-    this.statistics.recordService(
-      node,
-      hoursToMinutes(time - arrivedAt),
-      serviceTime,
+    const sampledServiceTime = sampleDuration(node.params.duration, this.random);
+    const completionTime = addWorkingTime(
       time,
-      completionTime,
-      token.attempt === 0
+      minutesToHours(sampledServiceTime),
+      node.params.resource
     );
+    const waitTime = hoursToMinutes(time - arrivedAt);
+    const waitTimeExcludingOffTimetable = hoursToMinutes(
+      workingTimeBetween(arrivedAt, time, node.params.resource)
+    );
+    const serviceTime = hoursToMinutes(completionTime - time);
+    const serviceTimeExcludingOffTimetable = hoursToMinutes(
+      workingTimeBetween(time, completionTime, node.params.resource)
+    );
+
+    this.statistics.recordService(node, {
+      waitTime,
+      waitTimeExcludingOffTimetable,
+      serviceTime,
+      serviceTimeExcludingOffTimetable,
+      startTime: time,
+      endTime: completionTime,
+      countTask: token.attempt === 0
+    });
     this.queue.schedule('TASK_COMPLETE', completionTime, {
       token,
       elementId: node.id,
       serviceTime,
+      serviceTimeExcludingOffTimetable,
       resourceId
     });
   }
@@ -1258,6 +1549,10 @@ export class DesEngine {
     resourceId?: string
   ): void {
     const caseState = this.tokens.getCase(payload.token.caseId);
+    const waitTime = hoursToMinutes(time - payload.arrivedAt);
+    const waitTimeExcludingOffTimetable = hoursToMinutes(
+      workingTimeBetween(payload.arrivedAt, time, node.params.resource)
+    );
 
     this.statistics.event('TASK_START', 'TASK_START', {
       time,
@@ -1267,37 +1562,19 @@ export class DesEngine {
       elementId: node.id,
       elementName: node.name,
       resourceId: resourceId ?? node.params.resource?.resourceId,
+      waitTime,
+      waitTimeExcludingOffTimetable,
       variables: caseState?.outputs
     });
   }
 
-  private sampleFailure(node: SimNode, token: Token): TaskFailureOutcome {
-    if (node.kind === 'serviceTask' && bernoulli(node.params.error?.probability, this.random)) {
-      const retryCount = Math.max(0, node.params.failure?.retryCount ?? 0);
-
-      if (token.attempt < retryCount) {
-        return 'retry';
-      }
-
-      return {
-        errorCode: pickWeighted(node.params.error?.possibleErrors, this.random)?.errorCode ?? 'SERVICE_ERROR',
-        serviceError: true
-      };
-    }
-
-    if (!bernoulli(node.params.failure?.probability, this.random)) {
+  private sampleFailure(node: SimNode): TaskFailureOutcome {
+    if (!bernoulli(node.params.error?.probability, this.random)) {
       return undefined;
     }
 
-    const retryCount = Math.max(0, node.params.failure?.retryCount ?? 0);
-
-    if (token.attempt < retryCount) {
-      return 'retry';
-    }
-
     return {
-      errorCode: 'TASK_FAILED',
-      serviceError: false
+      errorCode: pickWeighted(node.params.error?.possibleErrors, this.random)?.errorCode ?? 'UNSPECIFIED_ERROR'
     };
   }
 
@@ -1360,6 +1637,7 @@ export class DesEngine {
       elementName: node?.name,
       resourceId: payload.resourceId ?? node?.params.resource?.resourceId,
       serviceTime: payload.serviceTime,
+      serviceTimeExcludingOffTimetable: payload.serviceTimeExcludingOffTimetable,
       variables: caseState?.outputs ?? payload.variables
     });
   }
@@ -1389,7 +1667,7 @@ function minutesToHours(minutes: number): number {
 }
 
 function hoursToMinutes(hours: number): number {
-  return Math.max(0, hours) * 60;
+  return Math.round(Math.max(0, hours) * 60 * 1_000_000_000) / 1_000_000_000;
 }
 
 function sampleArrivalDelay(
@@ -1417,39 +1695,14 @@ function sampleArrivalDelay(
   return Math.max(0, arrival?.interval ?? arrival?.mean ?? 1);
 }
 
-function shiftMatchingWaitingToken(
-  waiting: ElementTokenPayload[],
-  delivery: EventDelivery
-): ElementTokenPayload | undefined {
-  const index = waiting.findIndex((payload) => deliveryMatchesCase(delivery, payload.token.caseId));
-
-  if (index < 0) {
-    return undefined;
-  }
-
-  return waiting.splice(index, 1)[0];
-}
-
-function shiftMatchingDelivery(
-  deliveries: EventDelivery[] | undefined,
-  targetCaseId: number
-): EventDelivery | undefined {
-  if (!deliveries?.length) {
-    return undefined;
-  }
-
-  const index = deliveries.findIndex((delivery) => deliveryMatchesCase(delivery, targetCaseId));
-
-  if (index < 0) {
-    return undefined;
-  }
-
-  return deliveries.splice(index, 1)[0];
-}
-
-function deliveryMatchesCase(delivery: EventDelivery, targetCaseId: number): boolean {
+function deliveryMatchesCase(
+  delivery: EventDelivery,
+  targetCaseId: number,
+  targetParentCaseId: number | undefined
+): boolean {
   return delivery.correlationCaseId === undefined ||
     delivery.correlationCaseId === targetCaseId ||
+    delivery.correlationCaseId === targetParentCaseId ||
     delivery.sourceCaseId === targetCaseId;
 }
 

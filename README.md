@@ -2,7 +2,7 @@
 
 Leichtgewichtige webbasierte BPMN-Simulationsumgebung auf Basis von `bpmn-js`, `bpmn-js-token-simulation` und `bpmn-js-properties-panel`.
 
-Die Token-Simulation bleibt als bpmn-js-Modul eingebunden. Der zusätzliche DES-Kern liest stochastische Simulationsparameter aus BPMN Extension Elements im Namespace `https://hsnr.de/data-science/bpmn/simulation` und führt keine externen Service-, User- oder Script-Task-Aktionen aus. Service Tasks, User Tasks und andere Activities werden ausschließlich über Dauer, Fehler, Retry und Output simuliert. Bearbeitungszeiten und Delay-Dauern werden in Minuten konfiguriert; die interne DES-Uhr bleibt fuer Kalender, Arbeitszeiten und Datum/Uhrzeit in Stunden.
+Die Token-Simulation bleibt als bpmn-js-Modul eingebunden. Der zusätzliche DES-Kern liest stochastische Simulationsparameter aus BPMN Extension Elements im Namespace `https://hsnr.de/data-science/bpmn/simulation` und führt keine externen Service-, User- oder Script-Task-Aktionen aus. Service Tasks, User Tasks und andere Activities werden ausschließlich über Dauer, Fehler und Output simuliert. Bearbeitungszeiten und Delay-Dauern werden in Minuten konfiguriert; die interne DES-Uhr bleibt fuer Kalender, Arbeitszeiten und Datum/Uhrzeit in Stunden.
 
 ## Start
 
@@ -53,7 +53,7 @@ src/
     entries/
       DurationDistributionEntry.ts
       BranchProbabilityEntry.ts
-      ServiceTaskErrorEntry.ts
+      ActivityErrorEntry.ts
       ResourceEntry.ts
   visualization/
     TokenOverlayManager.ts
@@ -102,9 +102,9 @@ Die Parameter werden im BPMN XML unter `bpmn:extensionElements` gespeichert:
           generator="categorical"
           choices="ok:0.8|manual:0.2" />
       </sim:outputObject>
-      <sim:failure probability="0.02" retryCount="2">
-        <sim:retryDelay type="fixed" mean="1" />
-      </sim:failure>
+      <sim:errorConfig probability="0.02">
+        <sim:possibleError errorCode="stockUnavailable" probability="1" />
+      </sim:errorConfig>
   </sim:taskConfig>
 </bpmn:extensionElements>
 
@@ -117,9 +117,10 @@ Die Parameter werden im BPMN XML unter `bpmn:extensionElements` gespeichert:
 
 Editierbar im Properties Panel sind:
 
-- Tasks: dynamische Dauerverteilung `fixed`, `uniform`, `normal`, `exponential`, `triangular`; je nach Auswahl werden nur die passenden Parameterfelder angezeigt. Dauerwerte sind Minuten und erlauben Dezimalzahlen, z. B. `0.1` fuer 6 Sekunden. Dazu kommen Ressourcenauswahl per Dropdown, Fehlerwahrscheinlichkeit, Retry-Anzahl und Retry-Delay.
+- Tasks: dynamische Dauerverteilung `fixed`, `uniform`, `normal`, `exponential`, `triangular`; je nach Auswahl werden nur die passenden Parameterfelder angezeigt. Dauerwerte sind Minuten und erlauben Dezimalzahlen, z. B. `0.1` fuer 6 Sekunden. Dazu kommen Ressourcenauswahl per Dropdown sowie Fehlerwahrscheinlichkeit und Fehlerart.
 - User Tasks, Script Tasks, Receive Tasks und Service Tasks: einfache Output-Objekte als Key-Value-Liste.
-- Service Tasks: zusaetzlich Fehlerwahrscheinlichkeit und mögliche Fehlercodes; stochastische Outputs werden ueber Output-Objects modelliert.
+- Alle Task-Aktivitaeten: Fehlerwahrscheinlichkeit und eine registrierte BPMN-Fehlerart. Neue Fehlerarten lassen sich direkt im Properties Panel anlegen; als Error Types stehen nur die im BPMN-Modell registrierten `bpmn:Error`-Elemente zur Auswahl. Stochastische Outputs werden ueber Output-Objects modelliert.
+- Boundary Error Events: fangen eine bestimmte registrierte BPMN-Fehlerart oder alternativ jeden Fehler ab.
 - Sequence Flows: JavaScript-Condition als BPMN `conditionExpression` im Documentation-Bereich und Branch-Wahrscheinlichkeit im DES-Bereich für XOR-Gateways ohne Bedingungen.
 - Start Events: Ankunftsverteilung `None`, `Fixed`, `Normal` oder `Exponential`, Anzahl der Cases und Ankunftskalender. Werte werden in Minuten eingegeben. `None` erzeugt keine Tokens und ist fuer Message-/Signal-Starts gedacht. Message-/Signal-Start-Events werden nicht automatisch aus Arrival-Konfigurationen gestartet, sondern nur durch passende Messages bzw. Signals. Neue Arrival-Kalender verwenden standardmaessig Montag bis Freitag, 8-17 Uhr.
 
@@ -149,7 +150,6 @@ SIGNAL_RECEIVED
 TOKEN_LEAVE_ELEMENT
 PROCESS_INSTANCE_COMPLETE
 TASK_FAILED
-RETRY_TASK
 ```
 
 `SimulationConfig` enthält `numberOfRuns`, optionales `maxSimulationTime`, `startTime`, `startDateTime`, `endDateTime`, `randomSeed`, `animationSpeed` und `collectTraces`. In der UI gibt es keine globale Case-Anzahl mehr; die Anzahl der Prozessinstanzen wird pro Start Event über dessen `numberOfCases` gepflegt. Die UI berechnet den optionalen Zeithorizont aus der eingestellten Endzeit; eine leere Endzeit bedeutet unbegrenzt.
@@ -164,7 +164,7 @@ Der Datenfluss ist:
 Simulation -> SimulationEvent Timeline -> TimelineFrame[] -> PlaybackController -> VisualState -> bpmn-js Overlay Rendering
 ```
 
-`SimulationEvent` ist die zentrale Schnittstelle zwischen DES und Playback. Es enthält Simulationszeit, stabile Sequenznummer, Prozessinstanz, optionale Token-ID, BPMN-Elemente und Payload. Fachliche DES-Events wie `TASK_STARTED`, `TASK_COMPLETED`, `GATEWAY_DECISION` oder `PROCESS_INSTANCE_COMPLETED` werden zusammen mit rein visuellen Bewegungsereignissen `TOKEN_MOVE_START` und `TOKEN_MOVE_END` in derselben Timeline abgelegt. Diese Bewegungsereignisse verbrauchen keine fachliche Prozesszeit; sie dienen nur dem Playback.
+`SimulationEvent` ist die zentrale Schnittstelle zwischen DES und Playback. Es enthält Simulationszeit, stabile Sequenznummer, Prozessinstanz, optionale Token-ID, BPMN-Elemente und Payload. Fachliche DES-Events wie `TASK_STARTED`, `TASK_COMPLETED`, `GATEWAY_DECISION`, `PROCESS_INSTANCE_COMPLETED` oder `PROCESS_INSTANCE_TERMINATED` werden zusammen mit rein visuellen Bewegungsereignissen `TOKEN_MOVE_START` und `TOKEN_MOVE_END` in derselben Timeline abgelegt. Diese Bewegungsereignisse verbrauchen keine fachliche Prozesszeit; sie dienen nur dem Playback.
 
 `TimelineFrameBuilder` sortiert die Events nach `simulationTime` und `sequence` und gruppiert alle Events mit gleicher Simulationszeit zu atomaren Frames. Dadurch starten parallele Tokenbewegungen, etwa nach einem Parallel Gateway, im selben Visualisierungsschritt synchron.
 
@@ -178,20 +178,21 @@ MVP-Unterstützung:
 
 - Start Event
 - End Event
+- Terminate End Event zum Beenden einer Prozessinstanz und Entfernen aller aktiven Tokens dieser Instanz
 - Task, User Task, Service Task
 - Exclusive Gateway
 - Parallel Gateway
 - Event-Based Gateway mit konkurrierenden Message-, Signal- und Timer-Catch-Events
 - Sequence Flow
-- einfache Subprozesse als Container mit Start-/End-Logik
-- Timer Intermediate Events als Verzögerung
+- eingebettete Subprozesse als korrelierte Child-Instanzen mit Start-/End-Logik und Variablenrueckgabe
+- Timer Intermediate Events als Verzögerung mit BPMN-`timeDuration` (z. B. `PT60M`, `P14D`) und dauerbasierten `timeCycle`-Ausdruecken (z. B. `R3/PT60M`); absolute Zeitpunkte sowie Monate/Jahre werden nicht simuliert
 - Collaborations mit mehreren BPMN-Prozessen/Pools
 - Message Start Events, Message Intermediate Catch/Throw Events und Message End Events
 - Signal Start Events, Signal Intermediate Catch/Throw Events und Signal End Events
+- Boundary Error Events an Activities und Subprozessen
 
 Vorbereitet, aber noch nicht vollständig implementiert:
 
-- Boundary Events
 - Event Subprocesses
 - Message/Signal Boundary Events
 - Inclusive Gateways
@@ -200,6 +201,8 @@ Vorbereitet, aber noch nicht vollständig implementiert:
 Nicht unterstützte Elemente brechen die Simulation nicht ab. Sie erzeugen eine Warnung im Log Panel und werden im Diagramm markiert.
 
 Message-Flows in einer Collaboration werden als gezielte Zustellung zwischen Prozessinstanzen interpretiert. Message Start Events erzeugen neue Prozessinstanzen nur durch passende Messages, Message Catch Events warten auf passende Messages; noch nicht konsumierte Messages werden für spätere Catch Events gepuffert. Child-Prozesse erhalten die `parentCaseId` als Prozessvariable. Signals werden als Broadcast behandelt und starten alle passenden Signal Start Events bzw. wecken passende wartende Signal Catch Events. Event-Based Gateways registrieren ihre ausgehenden Message-, Signal- und Timer-Catch-Events als konkurrierende Race; das erste eintretende Event setzt den Case fort und storniert die übrigen Alternativen. Zufällige externe Ereignisse werden über nicht korrelierte Start Events mit Arrival-Konfiguration modelliert, nicht über Message-/Signal-Start-Events.
+
+Eine eingebettete Sub-Process Activity startet eine eigene, mit dem Parent korrelierte Child-Instanz. Sie erbt die Prozessvariablen des Parents, einschließlich `parentCaseId`; die Arrival-Konfiguration ihres eingebetteten Start Events wird dabei bewusst ignoriert. Beim normalen Ende werden aktualisierte Variablen an den Parent zurückgegeben. Wirft eine Aktivität innerhalb des Subprozesses einen Fehler, wird die Child-Instanz beendet und der Fehler ausschließlich über ein nach Error Type passendes Boundary Error Event der Sub-Process Activity weitergeführt. Ohne passenden Boundary Handler wird die Parent-Instanz als fehlgeschlagen abgeschlossen. Child- und Parent-Tokens bleiben in der Timeline separat sichtbar und können im selben Playback verfolgt werden.
 
 ## XOR-Logik
 
@@ -213,7 +216,8 @@ Die Oberfläche enthält:
 
 - BPMN Modeler mit Properties Panel
 - Simulation Control Panel mit Start, Pause, Step backward, Step forward, Stop und Reset
-- Einstellungen für Seed, Startzeit, optionale Endzeit, aktuelle Simulationszeit und Animationsgeschwindigkeit
+- Einstellungen für Seed, Startzeit, optionale Endzeit und Animationsgeschwindigkeit
+- Zeitfortschrittsleiste mit aktueller Simulationszeit, Ticks in Stunden oder Tagen und geschätzter Endzeit aus den Start-Event-Arrival-Daten plus 20 Prozent Puffer
 - Speed-Regler mit den Stufen `1x`, `2x`, `4x`, `8x`, `16x`, `64x`, `256x` und `1024x`; `1x` nutzt eine verlangsamte Playback-Basis von zwei Hundertsteln der urspruenglichen Geschwindigkeit
 - Ressourcenbereich zum Bearbeiten von ID, Name, Kapazität, Wochentagen und stundenweisen Arbeitszeitbereichen
 - einklappbare linke Sidebar-Bereiche fuer Übersicht, Ressourcen, Bottlenecks, Pfade, Statistik, Event Log, Warnungen und Export
@@ -240,10 +244,14 @@ Wenn der bpmn-js-token-simulation-Schalter auf AN steht, erzeugt der obere Start
 
 Exporte sind als JSON, Simulation Results CSV und Event Log CSV vorbereitet. Beide CSV-Formate verwenden Semikolon als Trennzeichen. Das Event Log CSV enthält CaseID, Task-/Event-ID, Name, Startzeit, Endzeit für Tasks, Resource für Tasks und die aktuellen Prozessvariablen als JSON-String.
 
-Der Dashboard-Tab visualisiert Service- und Wartezeiten für den Gesamtprozess, jeden Task und jede Ressource. Die Prozess-Wartezeit ist die Summe aller Task-Wartezeiten je Prozessinstanz. Ein gruppiertes Balkendiagramm vergleicht Min, Max, Durchschnitt und Median. Zwei interaktive Plotly-Verteilungsdiagramme zeigen die Rohwerte für Service- und Wartezeiten und können gemeinsam zwischen Box- und Violin-Plots umgeschaltet werden. Der Scope kann zwischen Gesamtansicht, Prozess, Tasks und Ressourcen umgeschaltet werden.
+Der Dashboard-Tab visualisiert Service- und Wartezeiten für jeden BPMN-Prozess bzw. eingebetteten Subprozess, jeden Task und jede Ressource. Korrelierte Haupt- und Child-Prozesse bleiben im Dashboard getrennte Prozessserien. Die Prozess-Wartezeit ist die Summe aller Task-Wartezeiten je Prozessinstanz. Ein gruppiertes Balkendiagramm vergleicht Min, Max, Durchschnitt und Median. Zwei interaktive Plotly-Verteilungsdiagramme zeigen die Rohwerte für Service- und Wartezeiten und können gemeinsam zwischen Box- und Violin-Plots umgeschaltet werden; Violin ist der Default. Der Scope kann zwischen Gesamtansicht, Prozess, Tasks und Ressourcen umgeschaltet werden.
 
 ## Beispielmodell
 
-Die Demo-Auswahl lädt die BPMN-Dateien direkt aus `tests/bpmn`: das einfache Order-Fulfillment-Modell, das Messaging-/Signal-Modell mit mehreren Pools und Event-Based Gateway sowie das Insurance-Claims-Modell für den QBP-Import. Das ausgewählte Modell wird über den Demo-Button geladen und kann direkt im Modeler bearbeitet werden.
+Die Demo-Auswahl lädt die BPMN-Dateien direkt aus `tests/bpmn`: das einfache Order-Fulfillment-Modell, das Messaging-/Signal-Modell mit mehreren Pools und Event-Based Gateway, das Order-Fulfillment-Modell mit Subprozess- und Boundary-Error-Verarbeitung, das Pizza-Delivery-Modell mit Timer-/Message-Korrelation sowie das Insurance-Claims-Modell für den QBP-Import. Das ausgewählte Modell wird über den Demo-Button geladen und kann direkt im Modeler bearbeitet werden.
 
 Beim Import eines BIMP/QBP-Modells mit `qbp:processSimulationInfo` werden unterstützte Simulationsdaten automatisch in die nativen `sim:*`-Extension-Elements des Simulators migriert. Übernommen werden Prozessinstanzen und Arrival-Verteilung, Startzeit, Ressourcen und Timetables, Aktivitätsdauern und Ressourcenzuordnungen sowie Sequence-Flow-Wahrscheinlichkeiten. QBP-Kostenparameter werden derzeit nicht simuliert und als Importwarnung angezeigt. Der QBP-Block und sein Namespace werden vor dem bpmn-js-Import entfernt; ein anschließend exportiertes BPMN enthält deshalb ausschließlich die eigenen Simulationsannotationen.
+
+## User Documentation
+
+Ein erster fachlicher User Guide mit Screenshots der Demo-Modelle liegt unter [`docs/user-guide.md`](docs/user-guide.md).

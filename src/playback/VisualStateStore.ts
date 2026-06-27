@@ -145,6 +145,24 @@ export class VisualStateStore {
           token.status = 'completed';
         }
         break;
+      case 'PROCESS_INSTANCE_TERMINATED':
+        this.terminateProcessInstance(event.processInstanceId);
+        break;
+    }
+  }
+
+  private terminateProcessInstance(processInstanceId: string): void {
+    for (const token of this.state.tokens.values()) {
+      if (token.processInstanceId !== processInstanceId) {
+        continue;
+      }
+
+      token.status = 'terminated';
+      token.elementId = undefined;
+      token.sourceElementId = undefined;
+      token.targetElementId = undefined;
+      token.sequenceFlowId = undefined;
+      token.movement = undefined;
     }
   }
 

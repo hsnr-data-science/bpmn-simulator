@@ -16,7 +16,7 @@ import {
   updateSimulationValue
 } from '../../src/bpmn/ExtensionElementWriter';
 
-test('ExtensionElementWriter persists nested task duration and resource config', () => {
+test('ExtensionElementWriter persists nested task simulation config', () => {
   const businessObject: BpmnBusinessObject = {
     $type: 'bpmn:ServiceTask',
     id: 'service'
@@ -45,6 +45,8 @@ test('ExtensionElementWriter persists nested task duration and resource config',
 
   updateDurationConfig(element, { type: 'normal', mean: 10, stddev: 2 }, bpmnFactory, modeling);
   updateSimulationValue(element, 'task', ['resource', 'resourceId'], 'clerk', bpmnFactory, modeling);
+  updateSimulationValue(element, 'task', ['error', 'probability'], '0.25', bpmnFactory, modeling);
+  updateSimulationValue(element, 'task', ['error', 'possibleErrors'], 'pickerror:1', bpmnFactory, modeling);
   updateOutputObjectFields(
     element,
     [
@@ -76,6 +78,8 @@ test('ExtensionElementWriter persists nested task duration and resource config',
   assert.equal(config.duration?.mean, 10);
   assert.equal(config.duration?.stddev, 2);
   assert.equal(config.resource?.resourceId, 'clerk');
+  assert.equal(config.error?.probability, 0.25);
+  assert.deepEqual(config.error?.possibleErrors, [{ errorCode: 'pickerror', probability: 1 }]);
   assert.deepEqual(config.outputObject?.fields, [
     {
       key: 'score',

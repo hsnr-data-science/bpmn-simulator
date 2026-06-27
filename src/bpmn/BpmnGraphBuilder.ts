@@ -12,6 +12,7 @@ import type {
 import type { ElementSimulationConfig, SimulationResource } from '../types/simulation';
 import { classifyBpmnElement } from './BpmnElementClassifier';
 import { readConditionExpression, readResourceCatalog, readSimulationConfig } from './ExtensionElementReader';
+import { parseTimerExpression } from './TimerExpression';
 
 type BuildContext = {
   resources: Map<string, SimulationResource>;
@@ -22,6 +23,7 @@ type BuildContext = {
   messageFlows: SimMessageFlow[];
   messages: Map<string, string>;
   signals: Map<string, string>;
+  errors: Map<string, string>;
 };
 
 export function buildBpmnGraph(definitions: BpmnDefinitions): SimModel {
@@ -41,7 +43,8 @@ export function buildBpmnGraph(definitions: BpmnDefinitions): SimModel {
     processes: new Map(),
     messageFlows: [],
     messages: collectNamedRootElements(rootElements, 'bpmn:Message'),
-    signals: collectNamedRootElements(rootElements, 'bpmn:Signal')
+    signals: collectNamedRootElements(rootElements, 'bpmn:Signal'),
+    errors: collectNamedRootElements(rootElements, 'bpmn:Error')
   };
 
   for (const process of processes) {
@@ -98,7 +101,8 @@ export function buildBpmnGraph(definitions: BpmnDefinitions): SimModel {
     processes: context.processes,
     messageFlows: context.messageFlows,
     messages: context.messages,
-    signals: context.signals
+    signals: context.signals,
+    errors: context.errors
   };
 }
 
@@ -158,6 +162,7 @@ function addNode(
     supported: classification.supported,
     processId,
     parentSubProcessId,
+    attachedToRefId: referenceId(element.attachedToRef),
     subProcessStartIds: childStartIds,
     subProcessEndIds: childEndIds,
     defaultFlowId: element.default?.id,
@@ -293,22 +298,55 @@ function readEventDefinitions(element: BpmnBusinessObject, context: BuildContext
       ? definition.messageRef
       : type === 'signal'
         ? definition.signalRef
-        : undefined;
+        : type === 'error'
+          ? definition.errorRef
+          : undefined;
     const refId = referenceId(ref);
     const refName = referenceName(ref);
     const names = type === 'message'
       ? context.messages
       : type === 'signal'
         ? context.signals
-        : undefined;
+        : type === 'error'
+          ? context.errors
+          : undefined;
+    const timer = type === 'timer' ? readTimerExpression(definition) : undefined;
 
     return {
       id: definition.id,
       type,
       refId,
-      name: refName ?? (refId ? names?.get(refId) : undefined) ?? definition.name
+      name: refName ?? (refId ? names?.get(refId) : undefined) ?? definition.name,
+      timerDurationMinutes: timer?.durationMinutes,
+      timerExpression: timer?.expression,
+      timerIsCycle: timer?.kind === 'cycle'
     };
   });
+}
+
+function readTimerExpression(definition: BpmnBusinessObject) {
+  const duration = readExpressionBody(definition.timeDuration);
+
+  if (duration) {
+    return parseTimerExpression(duration);
+  }
+
+  return parseTimerExpression(readExpressionBody(definition.timeCycle));
+}
+
+function readExpressionBody(value: unknown): string | undefined {
+  if (typeof value === 'string') {
+    return value.trim() || undefined;
+  }
+
+  if (!value || typeof value !== 'object') {
+    return undefined;
+  }
+
+  const expression = value as BpmnBusinessObject;
+  const body = expression.body ?? expression.$body ?? expression.textContent;
+
+  return typeof body === 'string' && body.trim() ? body.trim() : undefined;
 }
 
 function toEventDefinitionType(type: string | undefined): SimEventDefinition['type'] {
@@ -326,6 +364,10 @@ function toEventDefinitionType(type: string | undefined): SimEventDefinition['ty
 
   if (type === 'bpmn:ErrorEventDefinition') {
     return 'error';
+  }
+
+  if (type === 'bpmn:TerminateEventDefinition') {
+    return 'terminate';
   }
 
   return 'unknown';

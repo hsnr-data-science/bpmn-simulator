@@ -19,6 +19,7 @@ export type BpmnBusinessObject = {
   processRef?: BpmnBusinessObject | string;
   messageRef?: BpmnBusinessObject | string;
   signalRef?: BpmnBusinessObject | string;
+  errorRef?: BpmnBusinessObject | string;
   extensionElements?: BpmnBusinessObject & {
     values?: BpmnBusinessObject[];
   };
@@ -67,7 +68,7 @@ export type FlowNodeKind =
   | 'multiInstanceActivity'
   | 'unsupported';
 
-export type SimEventDefinitionType = 'message' | 'signal' | 'timer' | 'error' | 'unknown';
+export type SimEventDefinitionType = 'message' | 'signal' | 'timer' | 'error' | 'terminate' | 'unknown';
 
 export type SimEventDirection = 'catch' | 'throw' | 'none';
 
@@ -76,6 +77,9 @@ export type SimEventDefinition = {
   type: SimEventDefinitionType;
   refId?: string;
   name?: string;
+  timerDurationMinutes?: number;
+  timerExpression?: string;
+  timerIsCycle?: boolean;
 };
 
 export type SimNode = {
@@ -89,6 +93,7 @@ export type SimNode = {
   supported: boolean;
   processId?: string;
   parentSubProcessId?: string;
+  attachedToRefId?: string;
   subProcessStartIds?: string[];
   subProcessEndIds?: string[];
   defaultFlowId?: string;
@@ -136,4 +141,5 @@ export type SimModel = {
   messageFlows?: SimMessageFlow[];
   messages?: Map<string, string>;
   signals?: Map<string, string>;
+  errors?: Map<string, string>;
 };

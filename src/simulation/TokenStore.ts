@@ -104,12 +104,36 @@ export class TokenStore {
     this.consume(caseId, time);
   }
 
-  incrementRetries(caseId: number): void {
+  abort(caseId: number, errorCode: string | undefined, time: number): void {
     const state = this.getCase(caseId);
 
-    if (state) {
-      state.retries += 1;
+    if (!state || state.endTime !== undefined) {
+      return;
     }
+
+    state.failed = true;
+
+    if (errorCode) {
+      state.errors.push(errorCode);
+    }
+
+    state.activeTokens = 0;
+    state.endTime = time;
+  }
+
+  terminate(caseId: number, time: number): void {
+    const state = this.getCase(caseId);
+
+    if (!state || state.endTime !== undefined) {
+      return;
+    }
+
+    state.activeTokens = 0;
+    state.endTime = time;
+  }
+
+  isOpen(caseId: number): boolean {
+    return this.getCase(caseId)?.endTime === undefined;
   }
 
   recordPath(caseId: number, elementId: string, collectTraces: boolean): void {

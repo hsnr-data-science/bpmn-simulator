@@ -13,6 +13,7 @@ export type TimelineEventType =
   | 'RESOURCE_ACQUIRED'
   | 'RESOURCE_RELEASED'
   | 'PROCESS_INSTANCE_COMPLETED'
+  | 'PROCESS_INSTANCE_TERMINATED'
   | 'WARNING';
 
 export interface SimulationEvent {

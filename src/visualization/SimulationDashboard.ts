@@ -1,4 +1,10 @@
 import type { ElementMetrics, ResourceMetrics, SimulationLogEntry, SimulationResult } from '../types/simulation';
+import { workingTimeBetween } from '../simulation/ResourceCalendar';
+import {
+  serviceTimeSamples,
+  type TimeAccountingMode,
+  waitTimeSamples
+} from '../simulation/TimeAccounting';
 
 type DashboardScope = 'all' | 'process' | 'task' | 'resource';
 type DistributionPlotType = 'box' | 'violin';
@@ -45,7 +51,8 @@ export class SimulationDashboard {
   private readonly waitBoxPlot: HTMLElement;
   private result?: SimulationResult;
   private plotly?: PlotlyApi;
-  private plotType: DistributionPlotType = 'box';
+  private plotType: DistributionPlotType = 'violin';
+  private timeAccountingMode: TimeAccountingMode = 'includingOffTimetable';
 
   constructor(root: HTMLElement) {
     this.root = root;
@@ -68,8 +75,8 @@ export class SimulationDashboard {
           <div class="dashboard-plot-control">
             <span>Distribution</span>
             <div class="dashboard-segmented-control" role="group" aria-label="Distribution plot type">
-              <button type="button" class="is-active" data-plot-type="box" aria-pressed="true">Box</button>
-              <button type="button" data-plot-type="violin" aria-pressed="false">Violin</button>
+              <button type="button" data-plot-type="box" aria-pressed="false">Box</button>
+              <button type="button" class="is-active" data-plot-type="violin" aria-pressed="true">Violin</button>
             </div>
           </div>
         </div>
@@ -138,19 +145,24 @@ export class SimulationDashboard {
     this.plotly.Plots.resize(this.waitBoxPlot);
   }
 
+  setTimeAccountingMode(mode: TimeAccountingMode): void {
+    this.timeAccountingMode = mode;
+    void this.renderCharts();
+  }
+
   private async renderCharts(): Promise<void> {
     if (!this.result || !this.plotly) {
       this.renderEmpty();
       return;
     }
 
-    const allSeries = buildDashboardSeries(this.result);
+    const allSeries = buildDashboardSeries(this.result, this.timeAccountingMode);
     const scope = this.scopeSelect.value as DashboardScope;
     const series = scope === 'all'
       ? allSeries
       : allSeries.filter((entry) => entry.scope === scope);
 
-    this.renderSummary(series);
+    this.renderSummary(series, processInstanceCount(this.result));
     this.clearEmptyPlaceholders();
 
     await Promise.all([
@@ -175,7 +187,7 @@ export class SimulationDashboard {
     ]);
   }
 
-  private renderSummary(series: DashboardSeries[]): void {
+  private renderSummary(series: DashboardSeries[], processInstances: number): void {
     const serviceSamples = series.flatMap((entry) => entry.serviceSamples);
     const waitSamples = series.flatMap((entry) => entry.waitSamples);
     const serviceStats = sampleStats(serviceSamples);
@@ -183,8 +195,8 @@ export class SimulationDashboard {
 
     this.summary.innerHTML = `
       <div>
-        <span>Scopes</span>
-        <strong>${series.length}</strong>
+        <span>Process Instances</span>
+        <strong>${processInstances}</strong>
       </div>
       <div>
         <span>Service Samples</span>
@@ -233,54 +245,98 @@ export class SimulationDashboard {
   }
 }
 
-export function buildDashboardSeries(result: SimulationResult): DashboardSeries[] {
-  const processSamples = buildProcessSamples(result);
-  const processSeries: DashboardSeries = {
-    id: 'process',
-    label: result.processName || 'Process',
-    scope: 'process',
-    serviceSamples: processSamples.serviceSamples,
-    waitSamples: processSamples.waitSamples
-  };
+export function buildDashboardSeries(
+  result: SimulationResult,
+  mode: TimeAccountingMode = 'includingOffTimetable'
+): DashboardSeries[] {
+  const processSeries = buildProcessSeries(result, mode);
   const taskSeries = result.elementMetrics
     .filter((metric) => isActivityMetric(metric))
-    .map((metric) => metricSeries(metric));
-  const resourceSeries = result.resourceMetrics.map((metric) => resourceSeriesEntry(metric));
+    .map((metric) => metricSeries(metric, mode));
+  const resourceSeries = result.resourceMetrics.map((metric) => resourceSeriesEntry(metric, mode));
 
-  return [processSeries, ...taskSeries, ...resourceSeries];
+  return [...processSeries, ...taskSeries, ...resourceSeries];
 }
 
-function metricSeries(metric: ElementMetrics): DashboardSeries {
+function buildProcessSeries(result: SimulationResult, mode: TimeAccountingMode): DashboardSeries[] {
+  const samples = buildProcessSamples(result, mode);
+  const processMetrics = result.processMetrics?.length
+    ? result.processMetrics
+    : [{
+        processId: 'process',
+        name: result.processName || 'Process',
+        instanceCount: result.cases.length,
+        completedInstances: result.completedCases,
+        failedInstances: result.failedCases
+      }];
+
+  return processMetrics
+    .map((metric) => {
+      const sample = samples.get(metric.processId);
+
+      return {
+        id: `process:${metric.processId}`,
+        label: `Process: ${metric.name || metric.processId}`,
+        scope: 'process' as const,
+        serviceSamples: sample?.serviceSamples ?? [],
+        waitSamples: sample?.waitSamples ?? []
+      };
+    })
+    .filter((series) => series.serviceSamples.length || series.waitSamples.length);
+}
+
+function metricSeries(metric: ElementMetrics, mode: TimeAccountingMode): DashboardSeries {
   return {
     id: metric.elementId,
     label: `Task: ${metric.name || metric.elementId}`,
     scope: 'task',
-    serviceSamples: [...metric.serviceTimeSamples ?? []],
-    waitSamples: [...metric.waitTimeSamples ?? []]
+    serviceSamples: [...serviceTimeSamples(metric, mode)],
+    waitSamples: [...waitTimeSamples(metric, mode)]
   };
 }
 
-function resourceSeriesEntry(metric: ResourceMetrics): DashboardSeries {
+function resourceSeriesEntry(metric: ResourceMetrics, mode: TimeAccountingMode): DashboardSeries {
   return {
     id: metric.resourceId,
     label: `Resource: ${metric.name || metric.resourceId}`,
     scope: 'resource',
-    serviceSamples: [...metric.serviceTimeSamples ?? []],
-    waitSamples: [...metric.waitTimeSamples ?? []]
+    serviceSamples: [...serviceTimeSamples(metric, mode)],
+    waitSamples: [...waitTimeSamples(metric, mode)]
   };
 }
 
-function buildProcessSamples(result: SimulationResult): {
-  serviceSamples: number[];
-  waitSamples: number[];
-} {
+function buildProcessSamples(
+  result: SimulationResult,
+  mode: TimeAccountingMode
+): Map<string, { serviceSamples: number[]; waitSamples: number[] }> {
   const serviceByCase = new Map<number, number>();
   const waitByCase = new Map<number, number>();
   const enterQueues = new Map<string, number[]>();
   const startQueues = new Map<string, number[]>();
+  const resources = new Map(result.resourceMetrics.map((metric) => [metric.resourceId, metric]));
+  const caseProcessIds = new Map<number, string>();
+  const casesByProcess = new Map<string, number[]>();
+  const currentTime = currentSimulationTime(result);
+
+  for (const caseTrace of result.cases) {
+    if (caseTrace.startTime > currentTime) {
+      continue;
+    }
+
+    const processId = processMetricIdForCase(result, caseTrace);
+    const caseIds = casesByProcess.get(processId) ?? [];
+
+    caseIds.push(caseTrace.id);
+    casesByProcess.set(processId, caseIds);
+    caseProcessIds.set(caseTrace.id, processId);
+  }
 
   for (const entry of result.log) {
-    if (entry.caseId === undefined || !entry.elementId) {
+    if (
+      entry.caseId === undefined ||
+      !entry.elementId ||
+      !caseProcessIds.has(entry.caseId)
+    ) {
       continue;
     }
 
@@ -294,10 +350,15 @@ function buildProcessSamples(result: SimulationResult): {
 
     if (entry.eventType === 'TASK_START') {
       const enterTime = shiftQueue(enterQueues, key) ?? time;
+      const resource = entry.resourceId ? resources.get(entry.resourceId) : undefined;
+      const waitTime = mode === 'excludingOffTimetable'
+        ? entry.waitTimeExcludingOffTimetable ??
+          workingTimeBetween(enterTime, time, resource) * 60
+        : entry.waitTime ?? Math.max(0, time - enterTime) * 60;
 
       waitByCase.set(
         entry.caseId,
-        normalizeMinutes((waitByCase.get(entry.caseId) ?? 0) + Math.max(0, time - enterTime) * 60)
+        normalizeMinutes((waitByCase.get(entry.caseId) ?? 0) + waitTime)
       );
       pushQueue(startQueues, key, time);
       continue;
@@ -305,7 +366,11 @@ function buildProcessSamples(result: SimulationResult): {
 
     if (entry.eventType === 'TASK_COMPLETE') {
       const startTime = shiftQueue(startQueues, key) ?? time;
-      const serviceTime = entry.serviceTime ?? Math.max(0, time - startTime) * 60;
+      const resource = entry.resourceId ? resources.get(entry.resourceId) : undefined;
+      const serviceTime = mode === 'excludingOffTimetable'
+        ? entry.serviceTimeExcludingOffTimetable ??
+          workingTimeBetween(startTime, time, resource) * 60
+        : entry.serviceTime ?? Math.max(0, time - startTime) * 60;
 
       serviceByCase.set(
         entry.caseId,
@@ -314,12 +379,13 @@ function buildProcessSamples(result: SimulationResult): {
     }
   }
 
-  const caseIds = result.cases.map((caseTrace) => caseTrace.id);
-
-  return {
-    serviceSamples: caseIds.map((caseId) => serviceByCase.get(caseId) ?? 0),
-    waitSamples: caseIds.map((caseId) => waitByCase.get(caseId) ?? 0)
-  };
+  return new Map([...casesByProcess.entries()].map(([processId, caseIds]) => [
+    processId,
+    {
+      serviceSamples: caseIds.map((caseId) => serviceByCase.get(caseId) ?? 0),
+      waitSamples: caseIds.map((caseId) => waitByCase.get(caseId) ?? 0)
+    }
+  ]));
 }
 
 function createBarTraces(series: DashboardSeries[]): Array<Record<string, unknown>> {
@@ -504,6 +570,35 @@ export function sampleStats(values: number[]): SampleStats {
 function isActivityMetric(metric: ElementMetrics): boolean {
   return /Task$/.test(metric.type) ||
     ['bpmn:SubProcess', 'bpmn:CallActivity', 'bpmn:Transaction'].includes(metric.type);
+}
+
+function processInstanceCount(result: SimulationResult): number {
+  const currentTime = currentSimulationTime(result);
+
+  return result.cases.filter((caseTrace) => caseTrace.startTime <= currentTime).length;
+}
+
+function processMetricIdForCase(
+  result: SimulationResult,
+  caseTrace: SimulationResult['cases'][number]
+): string {
+  if (caseTrace.trigger === 'subProcess' && caseTrace.triggerElementId) {
+    return caseTrace.triggerElementId;
+  }
+
+  if (caseTrace.processId) {
+    return caseTrace.processId;
+  }
+
+  return result.processMetrics?.[0]?.processId ?? 'process';
+}
+
+function currentSimulationTime(result: SimulationResult): number {
+  if (result.currentTime !== undefined && Number.isFinite(result.currentTime)) {
+    return result.currentTime;
+  }
+
+  return result.log.reduce((time, entry) => Math.max(time, entry.time ?? 0), 0);
 }
 
 function pushQueue(map: Map<string, number[]>, key: string, value: number): void {

@@ -72,6 +72,18 @@ test('VisualStateStore starts parallel movements synchronously for same-time fra
   assert.equal(store.rebuildUntil(6).tokens.length, 0);
 });
 
+test('VisualStateStore terminates all visible tokens in a process instance', () => {
+  const frames = new TimelineFrameBuilder().buildFrames([
+    event('waiting', 1, 1, 'TOKEN_WAITING', { tokenId: 'wait-token', elementId: 'catch' }),
+    event('active', 1, 2, 'TASK_STARTED', { tokenId: 'active-token', elementId: 'task' }),
+    event('terminated', 2, 3, 'PROCESS_INSTANCE_TERMINATED', { tokenId: 'end-token', elementId: 'terminate' })
+  ]);
+  const store = new VisualStateStore(frames);
+
+  assert.equal(store.rebuildUntil(1.5).tokens.length, 2);
+  assert.equal(store.rebuildUntil(2).tokens.length, 0);
+});
+
 function event(
   id: string,
   simulationTime: number,

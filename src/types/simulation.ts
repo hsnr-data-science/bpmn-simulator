@@ -4,8 +4,6 @@ export type DurationDistributionType = 'fixed' | 'uniform' | 'normal' | 'exponen
 
 export type ArrivalDistributionType = 'none' | 'fixed' | 'normal' | 'exponential';
 
-export type RetryDelayDistributionType = DurationDistributionType;
-
 export type OutputValueType = 'int' | 'float' | 'string';
 
 export type NumericOutputGeneratorType =
@@ -31,8 +29,8 @@ export type SimulationEventType =
   | 'SIGNAL_RECEIVED'
   | 'TOKEN_LEAVE_ELEMENT'
   | 'PROCESS_INSTANCE_COMPLETE'
-  | 'TASK_FAILED'
-  | 'RETRY_TASK';
+  | 'PROCESS_INSTANCE_TERMINATED'
+  | 'TASK_FAILED';
 
 export type DurationConfig = {
   type?: DurationDistributionType;
@@ -43,8 +41,6 @@ export type DurationConfig = {
   lambda?: number;
   mode?: number;
 };
-
-export type RetryDelayConfig = DurationConfig;
 
 export type Weekday = 1 | 2 | 3 | 4 | 5 | 6 | 7;
 
@@ -67,12 +63,6 @@ export type ResourceConfig = {
   capacity?: number;
   weekdays?: Weekday[];
   hourRanges?: HourRange[];
-};
-
-export type FailureConfig = {
-  probability?: number;
-  retryCount?: number;
-  retryDelay?: RetryDelayConfig;
 };
 
 export type OutputChoice = {
@@ -130,7 +120,6 @@ export type TaskSimulationConfig = {
   enabled?: boolean;
   duration?: DurationConfig;
   resource?: ResourceConfig;
-  failure?: FailureConfig;
   outputObject?: OutputObjectConfig;
   error?: ErrorConfig;
 };
@@ -212,8 +201,13 @@ export type ElementMetrics = {
   waitTime: number;
   waitTimeStddev: number;
   waitTimeSamples?: number[];
+  waitTimeExcludingOffTimetable: number;
+  waitTimeStddevExcludingOffTimetable: number;
+  waitTimeSamplesExcludingOffTimetable?: number[];
   serviceTime: number;
   serviceTimeSamples?: number[];
+  serviceTimeExcludingOffTimetable: number;
+  serviceTimeSamplesExcludingOffTimetable?: number[];
   unsupported: boolean;
 };
 
@@ -224,14 +218,30 @@ export type ResourceMetrics = {
   errors: number;
   waitTime: number;
   waitTimeSamples?: number[];
+  waitTimeExcludingOffTimetable: number;
+  waitTimeSamplesExcludingOffTimetable?: number[];
   serviceTime: number;
   serviceTimeSamples?: number[];
+  serviceTimeExcludingOffTimetable: number;
+  serviceTimeSamplesExcludingOffTimetable?: number[];
   firstTaskStartTime?: number;
   lastTaskEndTime?: number;
   capacity?: number;
   weekdays?: Weekday[];
   hourRanges?: HourRange[];
   utilization?: number;
+};
+
+export type ProcessMetrics = {
+  processId: string;
+  name: string;
+  instanceCount: number;
+  completedInstances: number;
+  failedInstances: number;
+  serviceTimeSamples?: number[];
+  serviceTimeSamplesExcludingOffTimetable?: number[];
+  waitTimeSamples?: number[];
+  waitTimeSamplesExcludingOffTimetable?: number[];
 };
 
 export type FlowMetrics = {
@@ -254,7 +264,10 @@ export type SimulationLogEntry = {
   elementId?: string;
   elementName?: string;
   resourceId?: string;
+  waitTime?: number;
+  waitTimeExcludingOffTimetable?: number;
   serviceTime?: number;
+  serviceTimeExcludingOffTimetable?: number;
   variables?: Record<string, CaseOutputValue>;
   time?: number;
 };
@@ -297,6 +310,7 @@ export type SimulationResult = {
   cycleTimeMax: number;
   throughputPerTimeUnit: number;
   elementMetrics: ElementMetrics[];
+  processMetrics: ProcessMetrics[];
   resourceMetrics: ResourceMetrics[];
   flowMetrics: FlowMetrics[];
   timeline: TimelineSimulationEvent[];

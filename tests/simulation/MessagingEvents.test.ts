@@ -429,10 +429,6 @@ function makeMessagingModelDeterministic(model: SimModel): void {
         mean: 0
       };
       node.params.resource = undefined;
-      node.params.failure = {
-        probability: 0,
-        retryCount: 0
-      };
       node.params.error = {
         probability: 0,
         possibleErrors: []

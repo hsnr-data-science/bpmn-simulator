@@ -197,14 +197,14 @@ function mapEventType(
       return 'TOKEN_LEAVE_ELEMENT';
     case 'PROCESS_INSTANCE_COMPLETE':
       return 'PROCESS_INSTANCE_COMPLETED';
+    case 'PROCESS_INSTANCE_TERMINATED':
+      return 'PROCESS_INSTANCE_TERMINATED';
     case 'MESSAGE_RECEIVED':
     case 'SIGNAL_RECEIVED':
     case 'TIMER_FIRED':
       return 'TOKEN_ENTER_ELEMENT';
     case 'TASK_FAILED':
       return 'WARNING';
-    case 'RETRY_TASK':
-      return 'TOKEN_WAITING';
     default:
       return undefined;
   }

@@ -1,4 +1,4 @@
-export function serviceTaskErrorEntries() {
+export function activityErrorEntries() {
   return [
     {
       id: 'sim-error-probability',
@@ -12,11 +12,19 @@ export function serviceTaskErrorEntries() {
       validate: 'probability'
     },
     {
-      id: 'sim-possible-errors',
-      label: 'Possible Errors',
+      id: 'sim-error-type',
+      label: 'Error Type',
       path: ['error', 'possibleErrors'],
-      control: 'text',
-      description: 'Format: errorCode:probability, errorCode:probability'
+      control: 'errorType'
     }
   ];
+}
+
+export function boundaryErrorEntry() {
+  return {
+    id: 'sim-boundary-error-type',
+    label: 'Error Type',
+    path: ['errorRef'],
+    control: 'errorType'
+  };
 }

@@ -189,8 +189,13 @@ export function createProgressResult(
     metric.waitTime = 0;
     metric.waitTimeStddev = 0;
     metric.waitTimeSamples = [];
+    metric.waitTimeExcludingOffTimetable = 0;
+    metric.waitTimeStddevExcludingOffTimetable = 0;
+    metric.waitTimeSamplesExcludingOffTimetable = [];
     metric.serviceTime = 0;
     metric.serviceTimeSamples = [];
+    metric.serviceTimeExcludingOffTimetable = 0;
+    metric.serviceTimeSamplesExcludingOffTimetable = [];
 
     return [metric.elementId, metric] as const;
   }));
@@ -199,6 +204,7 @@ export function createProgressResult(
   const startQueues = new Map<string, number[]>();
   const waitQueues = new Map<string, number[]>();
   const resourceStartQueues = new Map<string, Array<{ resourceId: string; startTime: number }>>();
+  const resourceIdByElement = new Map<string, string>();
   const visibleLog: SimulationLogEntry[] = [];
 
   for (const entry of result.log) {
@@ -230,15 +236,22 @@ export function createProgressResult(
         break;
       case 'TASK_START': {
         const enterTime = shiftQueue(enterQueues, key) ?? time;
-        const waitTime = hoursToMinutes(time - enterTime);
+        const resource = entry.resourceId
+          ? resourceMetricsById.get(entry.resourceId)
+          : undefined;
+        const waitTime = entry.waitTime ?? hoursToMinutes(time - enterTime);
+        const workingWaitTime = entry.waitTimeExcludingOffTimetable ??
+          hoursToMinutes(workingTimeBetween(enterTime, time, resource));
 
         metric.waitTime += waitTime;
         metric.waitTimeSamples?.push(waitTime);
+        metric.waitTimeExcludingOffTimetable += workingWaitTime;
+        metric.waitTimeSamplesExcludingOffTimetable?.push(workingWaitTime);
         pushQueue(waitQueues, key, waitTime);
         pushQueue(startQueues, key, time);
 
         if (entry.resourceId) {
-          const resource = resourceMetricsById.get(entry.resourceId);
+          resourceIdByElement.set(entry.elementId, entry.resourceId);
 
           if (resource) {
             if ((entry.attempt ?? 0) === 0) {
@@ -247,6 +260,8 @@ export function createProgressResult(
 
             resource.waitTime += waitTime;
             resource.waitTimeSamples?.push(waitTime);
+            resource.waitTimeExcludingOffTimetable += workingWaitTime;
+            resource.waitTimeSamplesExcludingOffTimetable?.push(workingWaitTime);
             resource.firstTaskStartTime = resource.firstTaskStartTime === undefined
               ? time
               : Math.min(resource.firstTaskStartTime, time);
@@ -260,18 +275,25 @@ export function createProgressResult(
 
         metric.completions += 1;
         const serviceTime = entry.serviceTime ?? hoursToMinutes(time - startTime);
+        const resource = entry.resourceId
+          ? resourceMetricsById.get(entry.resourceId)
+          : undefined;
+        const workingServiceTime = entry.serviceTimeExcludingOffTimetable ??
+          hoursToMinutes(workingTimeBetween(startTime, time, resource));
 
         metric.serviceTime += serviceTime;
         metric.serviceTimeSamples?.push(serviceTime);
+        metric.serviceTimeExcludingOffTimetable += workingServiceTime;
+        metric.serviceTimeSamplesExcludingOffTimetable?.push(workingServiceTime);
 
         if (entry.resourceId) {
-          const resource = resourceMetricsById.get(entry.resourceId);
-
           if (resource) {
             shiftQueue(waitQueues, key);
             shiftResourceStart(resourceStartQueues, key, entry.resourceId);
             resource.serviceTime += serviceTime;
             resource.serviceTimeSamples?.push(serviceTime);
+            resource.serviceTimeExcludingOffTimetable += workingServiceTime;
+            resource.serviceTimeSamplesExcludingOffTimetable?.push(workingServiceTime);
             resource.lastTaskEndTime = resource.lastTaskEndTime === undefined
               ? time
               : Math.max(resource.lastTaskEndTime, time);
@@ -292,17 +314,24 @@ export function createProgressResult(
           }
         }
         break;
-      case 'RETRY_TASK':
-        metric.retries += 1;
-        break;
     }
   }
 
-  addOpenWaitAndServiceSamples(currentTime, metricsById, enterQueues, startQueues);
+  addOpenWaitAndServiceSamples(
+    currentTime,
+    metricsById,
+    enterQueues,
+    startQueues,
+    resourceIdByElement,
+    resourceMetricsById
+  );
   addOpenResourceService(currentTime, resourceMetricsById, resourceStartQueues);
 
   for (const metric of elementMetrics) {
     metric.waitTimeStddev = standardDeviation(metric.waitTimeSamples ?? []);
+    metric.waitTimeStddevExcludingOffTimetable = standardDeviation(
+      metric.waitTimeSamplesExcludingOffTimetable ?? []
+    );
   }
 
   const flowCounts = countFlowsUntil(flowActivations, currentTime);
@@ -311,7 +340,9 @@ export function createProgressResult(
     count: flowCounts.get(metric.flowId) ?? 0
   }));
   const finishedCases = result.cases.filter((caseTrace) => {
-    return caseTrace.endTime <= currentTime && caseTrace.status !== 'running';
+    return caseTrace.trigger !== 'subProcess' &&
+      caseTrace.endTime <= currentTime &&
+      caseTrace.status !== 'running';
   });
   const completedCases = finishedCases.filter((caseTrace) => caseTrace.status === 'completed').length;
   const failedCases = finishedCases.filter((caseTrace) => caseTrace.status === 'failed').length;
@@ -343,7 +374,9 @@ export function createProgressResult(
     activityUtilization: elementMetrics.map((metric) => ({
       elementId: metric.elementId,
       name: metric.name,
-      utilization: elapsedTime > 0 ? (metric.serviceTime / 60) / elapsedTime : 0,
+      utilization: elapsedTime > 0
+        ? (metric.serviceTimeExcludingOffTimetable / 60) / elapsedTime
+        : 0,
       averageWaitTime: metric.visits ? metric.waitTime / metric.visits : 0,
       averageServiceTime: metric.completions ? metric.serviceTime / metric.completions : 0,
       tokenCount: metric.visits
@@ -356,7 +389,9 @@ function addOpenWaitAndServiceSamples(
   currentTime: number,
   metricsById: Map<string, SimulationResult['elementMetrics'][number]>,
   enterQueues: Map<string, number[]>,
-  startQueues: Map<string, number[]>
+  startQueues: Map<string, number[]>,
+  resourceIdByElement: Map<string, string>,
+  resources: Map<string, ResourceMetrics>
 ): void {
   for (const [key, times] of enterQueues.entries()) {
     const metric = metricsById.get(elementIdFromMetricKey(key));
@@ -367,9 +402,15 @@ function addOpenWaitAndServiceSamples(
 
     for (const activeWait of times) {
       const waitTime = hoursToMinutes(currentTime - activeWait);
+      const resource = resources.get(resourceIdByElement.get(metric.elementId) ?? '');
+      const workingWaitTime = hoursToMinutes(
+        workingTimeBetween(activeWait, currentTime, resource)
+      );
 
       metric.waitTime += waitTime;
       metric.waitTimeSamples?.push(waitTime);
+      metric.waitTimeExcludingOffTimetable += workingWaitTime;
+      metric.waitTimeSamplesExcludingOffTimetable?.push(workingWaitTime);
     }
   }
 
@@ -382,9 +423,15 @@ function addOpenWaitAndServiceSamples(
 
     for (const activeService of times) {
       const serviceTime = hoursToMinutes(currentTime - activeService);
+      const resource = resources.get(resourceIdByElement.get(metric.elementId) ?? '');
+      const workingServiceTime = hoursToMinutes(
+        workingTimeBetween(activeService, currentTime, resource)
+      );
 
       metric.serviceTime += serviceTime;
       metric.serviceTimeSamples?.push(serviceTime);
+      metric.serviceTimeExcludingOffTimetable += workingServiceTime;
+      metric.serviceTimeSamplesExcludingOffTimetable?.push(workingServiceTime);
     }
   }
 }
@@ -402,10 +449,13 @@ function addOpenResourceService(
         continue;
       }
 
-      const activeServiceTime = workingTimeBetween(entry.startTime, currentTime, resource) * 60;
+      const activeServiceTime = hoursToMinutes(currentTime - entry.startTime);
+      const workingServiceTime = workingTimeBetween(entry.startTime, currentTime, resource) * 60;
 
       resource.serviceTime += activeServiceTime;
       resource.serviceTimeSamples?.push(activeServiceTime);
+      resource.serviceTimeExcludingOffTimetable += workingServiceTime;
+      resource.serviceTimeSamplesExcludingOffTimetable?.push(workingServiceTime);
       resource.lastTaskEndTime = resource.lastTaskEndTime === undefined
         ? currentTime
         : Math.max(resource.lastTaskEndTime, currentTime);
@@ -448,8 +498,12 @@ function resetResourceMetric(metric: ResourceMetrics): ResourceMetrics {
     errors: 0,
     waitTime: 0,
     waitTimeSamples: [],
+    waitTimeExcludingOffTimetable: 0,
+    waitTimeSamplesExcludingOffTimetable: [],
     serviceTime: 0,
     serviceTimeSamples: [],
+    serviceTimeExcludingOffTimetable: 0,
+    serviceTimeSamplesExcludingOffTimetable: [],
     firstTaskStartTime: undefined,
     lastTaskEndTime: undefined,
     utilization: 0
@@ -462,7 +516,10 @@ function calculateResourceUtilization(metric: ResourceMetrics): number {
   const availableCapacityHours = workingHours * capacity;
 
   return availableCapacityHours > 0
-    ? Math.min(1, Math.max(0, (metric.serviceTime / 60) / availableCapacityHours))
+    ? Math.min(
+        1,
+        Math.max(0, (metric.serviceTimeExcludingOffTimetable / 60) / availableCapacityHours)
+      )
     : 0;
 }
 
