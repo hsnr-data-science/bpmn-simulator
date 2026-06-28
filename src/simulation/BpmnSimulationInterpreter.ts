@@ -66,6 +66,10 @@ export class BpmnSimulationInterpreter {
     return node.eventDirection === 'throw' && this.hasEventDefinition(node, 'message', 'signal');
   }
 
+  isThrowingEscalationEvent(node: SimNode): boolean {
+    return node.eventDirection === 'throw' && this.hasEventDefinition(node, 'escalation');
+  }
+
   getEventDefinitions(node: SimNode, ...types: SimEventDefinition['type'][]): SimEventDefinition[] {
     if (!types.length) {
       return node.eventDefinitions ?? [];
@@ -297,14 +301,18 @@ function formatProbability(value: number): string {
 }
 
 function normalizeConditionExpression(conditionExpression: string | undefined): string | undefined {
-  const expression = conditionExpression?.trim();
+  let expression = conditionExpression?.trim();
 
   if (!expression) {
     return undefined;
   }
 
   if (expression.startsWith('${') && expression.endsWith('}')) {
-    return stripTrailingSemicolons(expression.slice(2, -1).trim());
+    expression = expression.slice(2, -1).trim();
+  }
+
+  if (expression.startsWith('=')) {
+    expression = expression.slice(1).trim();
   }
 
   return stripTrailingSemicolons(expression);

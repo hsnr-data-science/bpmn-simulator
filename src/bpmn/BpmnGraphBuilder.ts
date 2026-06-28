@@ -24,6 +24,7 @@ type BuildContext = {
   messages: Map<string, string>;
   signals: Map<string, string>;
   errors: Map<string, string>;
+  escalations: Map<string, string>;
 };
 
 export function buildBpmnGraph(definitions: BpmnDefinitions): SimModel {
@@ -44,7 +45,8 @@ export function buildBpmnGraph(definitions: BpmnDefinitions): SimModel {
     messageFlows: [],
     messages: collectNamedRootElements(rootElements, 'bpmn:Message'),
     signals: collectNamedRootElements(rootElements, 'bpmn:Signal'),
-    errors: collectNamedRootElements(rootElements, 'bpmn:Error')
+    errors: collectNamedRootElements(rootElements, 'bpmn:Error'),
+    escalations: collectEscalations(rootElements)
   };
 
   for (const process of processes) {
@@ -102,7 +104,8 @@ export function buildBpmnGraph(definitions: BpmnDefinitions): SimModel {
     messageFlows: context.messageFlows,
     messages: context.messages,
     signals: context.signals,
-    errors: context.errors
+    errors: context.errors,
+    escalations: context.escalations
   };
 }
 
@@ -257,6 +260,18 @@ function collectNamedRootElements(rootElements: BpmnBusinessObject[], type: stri
   return values;
 }
 
+function collectEscalations(rootElements: BpmnBusinessObject[]): Map<string, string> {
+  const values = new Map<string, string>();
+
+  for (const element of rootElements) {
+    if (element.$type === 'bpmn:Escalation' && element.id) {
+      values.set(element.id, element.escalationCode ?? element.name ?? element.id);
+    }
+  }
+
+  return values;
+}
+
 function addMessageFlows(rootElements: BpmnBusinessObject[], context: BuildContext): void {
   for (const collaboration of rootElements.filter((root) => root.$type === 'bpmn:Collaboration')) {
     for (const messageFlow of collaboration.messageFlows ?? []) {
@@ -300,6 +315,8 @@ function readEventDefinitions(element: BpmnBusinessObject, context: BuildContext
         ? definition.signalRef
         : type === 'error'
           ? definition.errorRef
+          : type === 'escalation'
+            ? definition.escalationRef
           : undefined;
     const refId = referenceId(ref);
     const refName = referenceName(ref);
@@ -309,6 +326,8 @@ function readEventDefinitions(element: BpmnBusinessObject, context: BuildContext
         ? context.signals
         : type === 'error'
           ? context.errors
+          : type === 'escalation'
+            ? context.escalations
           : undefined;
     const timer = type === 'timer' ? readTimerExpression(definition) : undefined;
 
@@ -316,7 +335,9 @@ function readEventDefinitions(element: BpmnBusinessObject, context: BuildContext
       id: definition.id,
       type,
       refId,
-      name: refName ?? (refId ? names?.get(refId) : undefined) ?? definition.name,
+      name: type === 'escalation'
+        ? (refId ? names?.get(refId) : undefined) ?? refName ?? definition.name
+        : refName ?? (refId ? names?.get(refId) : undefined) ?? definition.name,
       timerDurationMinutes: timer?.durationMinutes,
       timerExpression: timer?.expression,
       timerIsCycle: timer?.kind === 'cycle'
@@ -364,6 +385,10 @@ function toEventDefinitionType(type: string | undefined): SimEventDefinition['ty
 
   if (type === 'bpmn:ErrorEventDefinition') {
     return 'error';
+  }
+
+  if (type === 'bpmn:EscalationEventDefinition') {
+    return 'escalation';
   }
 
   if (type === 'bpmn:TerminateEventDefinition') {

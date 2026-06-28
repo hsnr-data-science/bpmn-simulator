@@ -60,6 +60,7 @@ export function readTaskConfig(element?: BpmnBusinessObject): TaskSimulationConf
 
   return {
     enabled: asBoolean(readAttribute(config, 'enabled')),
+    delay: readDuration(findChild(config, 'sim:Delay', 'delay')),
     duration: readDuration(findChild(config, 'sim:Duration', 'duration')),
     resource: readResource(findChild(config, 'sim:Resource', 'resource')),
     outputObject: readOutputObject(findChild(config, 'sim:OutputObject', 'outputObject')),
@@ -231,6 +232,7 @@ function readResource(element?: BpmnBusinessObject): ResourceConfig | undefined 
     resourceId: asString(readAttribute(element, 'id')),
     resourceName: asString(readAttribute(element, 'name')),
     capacity: asInteger(readAttribute(element, 'capacity')),
+    sameInstanceAsBefore: asBoolean(readAttribute(element, 'sameInstanceAsBefore')),
     weekdays: parseWeekdays(asString(readAttribute(element, 'weekdays'))),
     hourRanges: parseHourRanges(asString(readAttribute(element, 'hourRanges')))
   };

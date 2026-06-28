@@ -22,6 +22,7 @@ export type SimulationEventType =
   | 'CASE_ARRIVAL'
   | 'EXTERNAL_EVENT_OCCURRED'
   | 'TOKEN_ENTER_ELEMENT'
+  | 'SUBPROCESS_START'
   | 'TASK_START'
   | 'TASK_COMPLETE'
   | 'TIMER_FIRED'
@@ -61,6 +62,7 @@ export type ResourceConfig = {
   resourceId?: string;
   resourceName?: string;
   capacity?: number;
+  sameInstanceAsBefore?: boolean;
   weekdays?: Weekday[];
   hourRanges?: HourRange[];
 };
@@ -118,6 +120,7 @@ export type BranchConfig = {
 
 export type TaskSimulationConfig = {
   enabled?: boolean;
+  delay?: DurationConfig;
   duration?: DurationConfig;
   resource?: ResourceConfig;
   outputObject?: OutputObjectConfig;
@@ -264,6 +267,7 @@ export type SimulationLogEntry = {
   elementId?: string;
   elementName?: string;
   resourceId?: string;
+  resourceInstanceId?: string;
   waitTime?: number;
   waitTimeExcludingOffTimetable?: number;
   serviceTime?: number;

@@ -111,6 +111,10 @@ test('TimelineOverlayRenderer renders idempotently and clears overlays', () => {
   assert.ok(layer.children[0].attributes.get('class')?.includes('des-token-single'));
   assert.equal(layer.children[1].children[1].textContent, '2');
   assert.ok(layer.children[1].attributes.get('class')?.includes('des-token-aggregate'));
+  const warningMarker = layer.children.find((child) => child.attributes.get('class') === 'des-warning-token');
+
+  assert.equal(warningMarker?.children[0]?.tagName, 'title');
+  assert.equal(warningMarker?.children[0]?.textContent, 'Something happened');
   assert.ok(!layer.children.some((child) => child.dataset.tokenIds?.includes('t5')));
   assert.ok(markers.get('task')?.has('des-token-current'));
   assert.ok(markers.get('flow')?.has('des-active-path'));
@@ -125,6 +129,75 @@ test('TimelineOverlayRenderer renders idempotently and clears overlays', () => {
   assert.equal(layer.children.length, 0);
   assert.equal(markers.get('task')?.size ?? 0, 0);
   assert.equal(markers.get('flow')?.size ?? 0, 0);
+});
+
+test('TimelineOverlayRenderer hides tokens outside the current canvas root', () => {
+  installFakeDocument();
+
+  const viewport = new FakeSvgElement('g');
+  const rootA = { id: 'Root_A' };
+  const rootB = { id: 'Root_B' };
+  const markers = new Map<string, Set<string>>();
+  const canvas = {
+    getContainer: () => ({
+      querySelector: () => viewport
+    }) as unknown as HTMLElement,
+    getRootElement: () => rootA,
+    addMarker: (elementId: string, marker: string) => {
+      const values = markers.get(elementId) ?? new Set<string>();
+
+      values.add(marker);
+      markers.set(elementId, values);
+    },
+    removeMarker: (elementId: string, marker: string) => {
+      markers.get(elementId)?.delete(marker);
+    }
+  };
+  const registry = {
+    get: (elementId: string) => {
+      if (elementId === 'task-a') {
+        return { id: 'task-a', x: 100, y: 100, width: 100, height: 80, parent: rootA };
+      }
+
+      if (elementId === 'task-b') {
+        return { id: 'task-b', x: 260, y: 100, width: 100, height: 80, parent: rootB };
+      }
+
+      return undefined;
+    }
+  };
+  const renderer = new TimelineOverlayRenderer(canvas, registry);
+
+  renderer.render({
+    simulationTime: 1,
+    activeElements: ['task-a', 'task-b'],
+    completedElements: [],
+    waitingTokens: [],
+    warnings: [
+      { id: 'warning-b', simulationTime: 1, elementId: 'task-b', message: 'hidden' }
+    ],
+    tokens: [
+      {
+        tokenId: 'visible-token',
+        processInstanceId: 'case-a',
+        elementId: 'task-a',
+        status: 'active'
+      },
+      {
+        tokenId: 'hidden-token',
+        processInstanceId: 'case-b',
+        elementId: 'task-b',
+        status: 'active'
+      }
+    ]
+  });
+
+  const layer = viewport.children[0];
+
+  assert.equal(layer.children.length, 1);
+  assert.equal(layer.children[0].dataset.tokenIds, 'visible-token');
+  assert.ok(markers.get('task-a')?.has('des-token-current'));
+  assert.equal(markers.get('task-b')?.has('des-token-current') ?? false, false);
 });
 
 function installFakeDocument(): void {

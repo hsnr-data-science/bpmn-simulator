@@ -21,6 +21,8 @@ import { SimulationClock } from './SimulationClock';
 import { StatisticsCollector } from './StatisticsCollector';
 import { TokenStore } from './TokenStore';
 
+const CASE_ID_FACTOR = 1_000_000;
+
 type CaseArrivalPayload = {
   caseId: number;
   startNodeId: string;
@@ -52,10 +54,13 @@ type TaskStartPayload = ElementTokenPayload & {
   arrivedAt: number;
 };
 
+type SubProcessStartPayload = ElementTokenPayload;
+
 type TaskCompletePayload = ElementTokenPayload & {
   serviceTime: number;
   serviceTimeExcludingOffTimetable: number;
   resourceId?: string;
+  resourceInstanceId?: string;
 };
 
 type TaskFailedPayload = ElementTokenPayload & {
@@ -88,6 +93,8 @@ type TaskFailureOutcome = {
   errorCode: string;
 } | undefined;
 
+type BoundaryEventKind = 'error' | 'escalation';
+
 type EmbeddedSubProcessInstance = {
   parentCaseId: number;
   parentToken: Token;
@@ -110,6 +117,9 @@ export class DesEngine {
   private readonly eventBasedGatewayRaces = new Map<string, EventBasedGatewayRace>();
   private readonly embeddedSubProcesses = new Map<number, EmbeddedSubProcessInstance>();
   private readonly unsupportedTimerWarnings = new Set<string>();
+  private readonly assignedCaseIds = new Set<number>();
+  private readonly childCaseCounters = new Map<number, number>();
+  private readonly resourceInstanceBindings = new Map<string, string>();
   private nextCaseId = 1;
 
   constructor(model: SimModel, options: SimulationConfig) {
@@ -176,7 +186,7 @@ export class DesEngine {
       return;
     }
 
-    if (event.type !== 'TASK_START') {
+    if (event.type !== 'TASK_START' && event.type !== 'SUBPROCESS_START') {
       this.recordEvent(event);
     }
 
@@ -189,6 +199,9 @@ export class DesEngine {
         break;
       case 'TOKEN_ENTER_ELEMENT':
         this.enterElement((event.payload as TokenPayload).token, event.time);
+        break;
+      case 'SUBPROCESS_START':
+        this.startSubProcessActivity(event.payload as SubProcessStartPayload, event.time);
         break;
       case 'TASK_START':
         this.startTask(event.payload as TaskStartPayload, event.time);
@@ -418,7 +431,7 @@ export class DesEngine {
       variables?: Record<string, CaseOutputValue>;
     }
   ): number {
-    const caseId = this.allocateCaseId();
+    const caseId = this.allocateCaseId(options.sourceCaseId);
 
     this.queue.schedule('CASE_ARRIVAL', time, {
       caseId,
@@ -431,8 +444,45 @@ export class DesEngine {
     return caseId;
   }
 
-  private allocateCaseId(): number {
-    return this.nextCaseId++;
+  private allocateCaseId(parentCaseId?: number): number {
+    if (parentCaseId !== undefined) {
+      const nextChildIndex = (this.childCaseCounters.get(parentCaseId) ?? 0) + 1;
+      let childIndex = nextChildIndex;
+      let candidate = parentCaseId * CASE_ID_FACTOR + childIndex;
+
+      while (
+        this.assignedCaseIds.has(candidate) ||
+        !Number.isSafeInteger(candidate)
+      ) {
+        childIndex += 1;
+        candidate = parentCaseId * CASE_ID_FACTOR + childIndex;
+
+        if (!Number.isSafeInteger(candidate)) {
+          candidate = this.allocateRootCaseId();
+          break;
+        }
+      }
+
+      this.childCaseCounters.set(parentCaseId, childIndex);
+      this.assignedCaseIds.add(candidate);
+
+      return candidate;
+    }
+
+    return this.allocateRootCaseId();
+  }
+
+  private allocateRootCaseId(): number {
+    while (this.assignedCaseIds.has(this.nextCaseId)) {
+      this.nextCaseId += 1;
+    }
+
+    const caseId = this.nextCaseId;
+
+    this.assignedCaseIds.add(caseId);
+    this.nextCaseId += 1;
+
+    return caseId;
   }
 
   private enterElement(token: Token, time: number): void {
@@ -474,7 +524,10 @@ export class DesEngine {
     }
 
     if (node.kind === 'subProcess') {
-      this.startEmbeddedSubProcess(node, token, time);
+      this.queue.schedule('SUBPROCESS_START', time + this.sampleActivityDelay(node), {
+        token,
+        elementId: node.id
+      });
       return;
     }
 
@@ -501,8 +554,13 @@ export class DesEngine {
       return;
     }
 
+    if (this.interpreter.isThrowingEscalationEvent(node)) {
+      this.throwEscalationEvent(node, token, time);
+      return;
+    }
+
     if (this.interpreter.isTask(node)) {
-      this.queue.schedule('TASK_START', time, {
+      this.queue.schedule('TASK_START', time + this.sampleActivityDelay(node), {
         token,
         elementId: node.id,
         arrivedAt: time
@@ -545,6 +603,17 @@ export class DesEngine {
     });
   }
 
+  private startSubProcessActivity(payload: SubProcessStartPayload, time: number): void {
+    const node = this.interpreter.getNode(payload.elementId);
+
+    if (!node) {
+      this.tokens.consume(payload.token.caseId, time);
+      return;
+    }
+
+    this.startEmbeddedSubProcess(node, payload.token, time);
+  }
+
   private startEmbeddedSubProcess(node: SimNode, parentToken: Token, time: number): void {
     const startIds = this.interpreter.getSubProcessStarts(node);
     const parentCase = this.tokens.getCase(parentToken.caseId);
@@ -562,7 +631,7 @@ export class DesEngine {
       return;
     }
 
-    const childCaseId = this.allocateCaseId();
+    const childCaseId = this.allocateCaseId(parentToken.caseId);
 
     this.embeddedSubProcesses.set(childCaseId, {
       parentCaseId: parentToken.caseId,
@@ -718,7 +787,14 @@ export class DesEngine {
       return;
     }
 
-    const resourceStart = this.resources.request(node, payload.token, time);
+    const preferredResourceInstanceId = this.getPreferredResourceInstanceId(node, payload.token.caseId);
+    const resourceStart = this.resources.request(
+      node,
+      payload.token,
+      time,
+      preferredResourceInstanceId,
+      payload.arrivedAt
+    );
 
     if (!resourceStart.started) {
       if (resourceStart.delayedUntil !== undefined && resourceStart.delayedUntil > time) {
@@ -728,8 +804,16 @@ export class DesEngine {
       return;
     }
 
-    this.recordTaskStart(payload, node, time, resourceStart.resourceId);
-    this.scheduleTaskCompletion(node, payload.token, payload.arrivedAt, time, resourceStart.resourceId);
+    this.bindResourceInstance(node, payload.token.caseId, resourceStart.resourceInstanceId);
+    this.recordTaskStart(payload, node, time, resourceStart.resourceId, resourceStart.resourceInstanceId);
+    this.scheduleTaskCompletion(
+      node,
+      payload.token,
+      payload.arrivedAt,
+      time,
+      resourceStart.resourceId,
+      resourceStart.resourceInstanceId
+    );
   }
 
   private completeTask(payload: TaskCompletePayload, time: number): void {
@@ -740,7 +824,7 @@ export class DesEngine {
       return;
     }
 
-    for (const queued of this.resources.release(payload.resourceId)) {
+    for (const queued of this.resources.release(payload.resourceId, payload.resourceInstanceId)) {
       this.startQueuedTask(queued, time);
     }
 
@@ -775,7 +859,7 @@ export class DesEngine {
     if (node) {
       this.statistics.recordError(node);
 
-      if (this.routeActivityError(node, payload.token, payload.errorCode, time)) {
+      if (this.routeActivityBoundaryEvent(node, payload.token, payload.errorCode, 'error', time)) {
         return;
       }
     }
@@ -783,30 +867,32 @@ export class DesEngine {
     this.tokens.fail(payload.token.caseId, payload.errorCode, time);
   }
 
-  private routeActivityError(
+  private routeActivityBoundaryEvent(
     node: SimNode,
     token: Token,
-    errorCode: string | undefined,
+    eventCode: string | undefined,
+    kind: BoundaryEventKind,
     time: number
   ): boolean {
-    const boundary = this.findMatchingBoundaryEvent(node.id, errorCode);
+    const boundary = this.findMatchingBoundaryEvent(node.id, eventCode, kind);
 
     if (boundary) {
-      this.routeToBoundaryEvent(boundary, token, errorCode, time);
+      this.routeToBoundaryEvent(boundary, token, eventCode, kind, time);
       return true;
     }
 
     if (node.parentSubProcessId) {
-      return this.bubbleSubProcessError(token.caseId, node.parentSubProcessId, errorCode, time);
+      return this.bubbleSubProcessBoundaryEvent(token.caseId, node.parentSubProcessId, eventCode, kind, time);
     }
 
     return false;
   }
 
-  private bubbleSubProcessError(
+  private bubbleSubProcessBoundaryEvent(
     childCaseId: number,
     subProcessId: string,
-    errorCode: string | undefined,
+    eventCode: string | undefined,
+    kind: BoundaryEventKind,
     time: number
   ): boolean {
     const instance = this.embeddedSubProcesses.get(childCaseId);
@@ -816,54 +902,73 @@ export class DesEngine {
       return false;
     }
 
-    this.tokens.abort(childCaseId, errorCode, time);
+    this.terminateChildProcesses(childCaseId, time, eventCode);
+    this.tokens.abort(childCaseId, eventCode, time);
+    this.removeWaitingTokensForCase(childCaseId);
     this.embeddedSubProcesses.delete(childCaseId);
     this.statistics.recordError(subProcess);
 
-    const boundary = this.findMatchingBoundaryEvent(subProcess.id, errorCode);
+    const boundary = this.findMatchingBoundaryEvent(subProcess.id, eventCode, kind);
 
-    if (!boundary) {
-      this.statistics.warn(
-        `Error "${errorCode ?? 'unknown'}" from subprocess "${subProcess.name}" has no matching Boundary Error Event.`,
-        subProcess.id,
-        time
-      );
-      this.tokens.fail(instance.parentCaseId, errorCode, time);
+    if (boundary) {
+      this.routeToBoundaryEvent(boundary, instance.parentToken, eventCode, kind, time);
       return true;
     }
 
-    this.routeToBoundaryEvent(boundary, instance.parentToken, errorCode, time);
+    if (subProcess.parentSubProcessId) {
+      return this.bubbleSubProcessBoundaryEvent(
+        instance.parentCaseId,
+        subProcess.parentSubProcessId,
+        eventCode,
+        kind,
+        time
+      );
+    }
+
+    this.statistics.warn(
+      `${boundaryKindLabel(kind)} "${eventCode ?? 'unknown'}" from subprocess "${subProcess.name}" has no matching Boundary ${boundaryKindLabel(kind)} Event.`,
+      subProcess.id,
+      time
+    );
+    this.tokens.fail(instance.parentCaseId, eventCode, time);
     return true;
   }
 
   private findMatchingBoundaryEvent(
     activityId: string,
-    errorCode: string | undefined
+    eventCode: string | undefined,
+    kind: BoundaryEventKind
   ): SimNode | undefined {
     const boundaries = this.interpreter.getAttachedBoundaryEvents(activityId);
 
     return boundaries.find((boundary) => {
-      const errors = this.interpreter.getEventDefinitions(boundary, 'error');
+      const allDefinitions = this.interpreter.getEventDefinitions(boundary);
+      const definitions = this.interpreter.getEventDefinitions(boundary, kind);
 
-      if (!errors.length) {
-        return true;
+      if (!definitions.length) {
+        return allDefinitions.length === 0;
       }
 
-      return errors.some((definition) => eventDefinitionKeys(
+      if (!eventCode) {
+        return definitions.some((definition) => !definition.refId && !definition.name);
+      }
+
+      return definitions.some((definition) => eventDefinitionKeys(
         definition,
         this.interpreter.getEventKey(definition)
-      ).includes(errorCode ?? ''));
+      ).includes(eventCode ?? ''));
     });
   }
 
   private routeToBoundaryEvent(
     boundary: SimNode,
     token: Token,
-    errorCode: string | undefined,
+    eventCode: string | undefined,
+    kind: BoundaryEventKind,
     time: number
   ): void {
     this.statistics.info(
-      `Error "${errorCode ?? 'unknown'}" is caught by Boundary Event "${boundary.name}".`,
+      `${boundaryKindLabel(kind)} "${eventCode ?? 'unknown'}" is caught by Boundary Event "${boundary.name}".`,
       boundary.id,
       time
     );
@@ -871,6 +976,34 @@ export class DesEngine {
       ...token,
       elementId: boundary.id
     }, time, false);
+  }
+
+  private throwEscalationEvent(node: SimNode, token: Token, time: number): void {
+    const escalation = this.interpreter.getEventDefinitions(node, 'escalation')[0];
+    const eventCode = escalation ? this.interpreter.getEventKey(escalation) : undefined;
+
+    this.statistics.info(
+      `Escalation "${eventCode ?? node.name}" thrown by "${node.name}".`,
+      node.id,
+      time
+    );
+
+    if (node.parentSubProcessId &&
+      this.bubbleSubProcessBoundaryEvent(token.caseId, node.parentSubProcessId, eventCode, 'escalation', time)
+    ) {
+      return;
+    }
+
+    if (this.routeActivityBoundaryEvent(node, token, eventCode, 'escalation', time)) {
+      return;
+    }
+
+    this.statistics.warn(
+      `Escalation "${eventCode ?? node.name}" has no matching Boundary Escalation Event.`,
+      node.id,
+      time
+    );
+    this.tokens.fail(token.caseId, eventCode, time);
   }
 
   private waitForMessageOrSignal(token: Token, node: SimNode, time: number): void {
@@ -1420,11 +1553,31 @@ export class DesEngine {
       this.statistics.recordCompletion(node);
     }
 
+    this.terminateChildProcesses(payload.token.caseId, time);
     this.tokens.terminate(payload.token.caseId, time);
     this.removeWaitingTokensForCase(payload.token.caseId);
 
     if (node?.parentSubProcessId) {
       this.completeEmbeddedSubProcess(payload.token.caseId, time);
+    }
+  }
+
+  private terminateChildProcesses(parentCaseId: number, time: number, errorCode?: string): void {
+    const childCaseIds = this.tokens.getCases()
+      .filter((caseState) => caseState.parentCaseId === parentCaseId && caseState.endTime === undefined)
+      .map((caseState) => caseState.id);
+
+    for (const childCaseId of childCaseIds) {
+      this.terminateChildProcesses(childCaseId, time, errorCode);
+
+      if (errorCode) {
+        this.tokens.abort(childCaseId, errorCode, time);
+      } else {
+        this.tokens.terminate(childCaseId, time);
+      }
+
+      this.removeWaitingTokensForCase(childCaseId);
+      this.embeddedSubProcesses.delete(childCaseId);
     }
   }
 
@@ -1479,12 +1632,65 @@ export class DesEngine {
     });
   }
 
+  private sampleActivityDelay(node: SimNode): number {
+    if (!node.params.delay) {
+      return 0;
+    }
+
+    return minutesToHours(sampleDuration(node.params.delay, this.random));
+  }
+
+  private getPreferredResourceInstanceId(node: SimNode, caseId: number): string | undefined {
+    const resourceId = node.params.resource?.resourceId;
+
+    if (!resourceId || !node.params.resource?.sameInstanceAsBefore) {
+      return undefined;
+    }
+
+    return this.resourceInstanceBindings.get(this.resourceBindingKey(caseId, resourceId));
+  }
+
+  private bindResourceInstance(
+    node: SimNode,
+    caseId: number,
+    resourceInstanceId: string | undefined
+  ): void {
+    const resourceId = node.params.resource?.resourceId;
+
+    if (!resourceId || !resourceInstanceId || !node.params.resource?.sameInstanceAsBefore) {
+      return;
+    }
+
+    this.resourceInstanceBindings.set(this.resourceBindingKey(caseId, resourceId), resourceInstanceId);
+  }
+
+  private resourceBindingKey(caseId: number, resourceId: string): string {
+    return `${this.rootCaseId(caseId)}:${resourceId}`;
+  }
+
+  private rootCaseId(caseId: number): number {
+    let current = this.tokens.getCase(caseId);
+
+    while (current?.parentCaseId !== undefined) {
+      const parent = this.tokens.getCase(current.parentCaseId);
+
+      if (!parent) {
+        return current.parentCaseId;
+      }
+
+      current = parent;
+    }
+
+    return current?.id ?? caseId;
+  }
+
   private scheduleTaskCompletion(
     node: SimNode,
     token: Token,
     arrivedAt: number,
     time: number,
-    resourceId?: string
+    resourceId?: string,
+    resourceInstanceId?: string
   ): void {
     const sampledServiceTime = sampleDuration(node.params.duration, this.random);
     const completionTime = addWorkingTime(
@@ -1515,12 +1721,19 @@ export class DesEngine {
       elementId: node.id,
       serviceTime,
       serviceTimeExcludingOffTimetable,
-      resourceId
+      resourceId,
+      resourceInstanceId
     });
   }
 
   private startQueuedTask(queued: QueuedTask, time: number): void {
-    const resourceStart = this.resources.request(queued.node, queued.token, time);
+    const resourceStart = this.resources.request(
+      queued.node,
+      queued.token,
+      time,
+      queued.preferredResourceInstanceId,
+      queued.arrivedAt
+    );
 
     if (!resourceStart.started) {
       if (resourceStart.delayedUntil !== undefined && resourceStart.delayedUntil > time) {
@@ -1534,19 +1747,28 @@ export class DesEngine {
       return;
     }
 
+    this.bindResourceInstance(queued.node, queued.token.caseId, resourceStart.resourceInstanceId);
     this.recordTaskStart({
       token: queued.token,
       elementId: queued.node.id,
       arrivedAt: queued.arrivedAt
-    }, queued.node, time, resourceStart.resourceId);
-    this.scheduleTaskCompletion(queued.node, queued.token, queued.arrivedAt, time, resourceStart.resourceId);
+    }, queued.node, time, resourceStart.resourceId, resourceStart.resourceInstanceId);
+    this.scheduleTaskCompletion(
+      queued.node,
+      queued.token,
+      queued.arrivedAt,
+      time,
+      resourceStart.resourceId,
+      resourceStart.resourceInstanceId
+    );
   }
 
   private recordTaskStart(
     payload: TaskStartPayload,
     node: SimNode,
     time: number,
-    resourceId?: string
+    resourceId?: string,
+    resourceInstanceId?: string
   ): void {
     const caseState = this.tokens.getCase(payload.token.caseId);
     const waitTime = hoursToMinutes(time - payload.arrivedAt);
@@ -1562,6 +1784,7 @@ export class DesEngine {
       elementId: node.id,
       elementName: node.name,
       resourceId: resourceId ?? node.params.resource?.resourceId,
+      resourceInstanceId,
       waitTime,
       waitTimeExcludingOffTimetable,
       variables: caseState?.outputs
@@ -1636,6 +1859,7 @@ export class DesEngine {
       elementId,
       elementName: node?.name,
       resourceId: payload.resourceId ?? node?.params.resource?.resourceId,
+      resourceInstanceId: payload.resourceInstanceId,
       serviceTime: payload.serviceTime,
       serviceTimeExcludingOffTimetable: payload.serviceTimeExcludingOffTimetable,
       variables: caseState?.outputs ?? payload.variables
@@ -1719,6 +1943,10 @@ function messageFlowMatches(flow: SimMessageFlow, definition: SimEventDefinition
 function eventDefinitionKeys(definition: SimEventDefinition, eventKey: string): string[] {
   return [eventKey, definition.name, definition.refId, definition.id]
     .filter((key): key is string => Boolean(key));
+}
+
+function boundaryKindLabel(kind: BoundaryEventKind): string {
+  return kind === 'escalation' ? 'Escalation' : 'Error';
 }
 
 function cloneVariables(

@@ -102,6 +102,7 @@ type CanvasWithRoot = {
 };
 
 const durationDrafts = new WeakMap<object, DurationConfig>();
+const delayDrafts = new WeakMap<object, DurationConfig>();
 const arrivalDrafts = new WeakMap<object, ArrivalConfig>();
 const outputObjectDrafts = new WeakMap<object, OutputFieldConfig[]>();
 const errorTypeDrafts = new WeakMap<object, string>();
@@ -164,6 +165,12 @@ function createEntries(element: BpmnElement): Entry[] {
 
   if (isTaskType(type) || type === 'bpmn:SubProcess') {
     definitions.push(
+      {
+        id: 'sim-activity-delay-distribution',
+        label: 'Start Delay Distribution (minutes)',
+        path: ['delay', 'type'],
+        control: 'durationDistribution'
+      },
       ...(durationDistributionEntries() as EntryDefinition[]),
       ...(resourceEntries() as EntryDefinition[])
     );
@@ -678,17 +685,18 @@ function SimulationArrivalCalendar(props: Entry): unknown {
 function SimulationDurationDistribution(props: Entry): unknown {
   const modeling = useService<Modeling>('modeling');
   const bpmnFactory = useService<BpmnFactory>('bpmnFactory');
-  const duration = getDurationConfig(props.element);
+  const durationPath = getDurationConfigPath(props);
+  const duration = getDurationConfig(props.element, durationPath);
 
   const persist = (nextDuration: DurationConfig) => {
     if (props.element.businessObject) {
-      durationDrafts.set(props.element.businessObject, nextDuration);
+      getDurationDrafts(durationPath).set(props.element.businessObject, nextDuration);
     }
 
-    updateDurationConfig(props.element, nextDuration, bpmnFactory, modeling);
+    updateDurationConfig(props.element, nextDuration, bpmnFactory, modeling, durationPath);
   };
   const update = (patch: Partial<DurationConfig>) => {
-    persist(normalizeDurationPatch({ ...getDurationConfig(props.element), ...patch }));
+    persist(normalizeDurationPatch({ ...getDurationConfig(props.element, durationPath), ...patch }));
   };
 
   return h('div', {
@@ -709,12 +717,22 @@ function SimulationDurationDistribution(props: Entry): unknown {
   ]);
 }
 
-function getDurationConfig(element: BpmnElement): DurationConfig {
-  if (element.businessObject && durationDrafts.has(element.businessObject)) {
-    return durationDrafts.get(element.businessObject) ?? { type: 'fixed', mean: 0 };
+function getDurationConfig(element: BpmnElement, path: 'duration' | 'delay'): DurationConfig {
+  const drafts = getDurationDrafts(path);
+
+  if (element.businessObject && drafts.has(element.businessObject)) {
+    return drafts.get(element.businessObject) ?? { type: 'fixed', mean: 0 };
   }
 
-  return normalizeDurationPatch(readSimulationConfig(element.businessObject).duration ?? { type: 'fixed', mean: 0 });
+  return normalizeDurationPatch(readSimulationConfig(element.businessObject)[path] ?? { type: 'fixed', mean: 0 });
+}
+
+function getDurationConfigPath(props: Entry): 'duration' | 'delay' {
+  return props.path[0] === 'delay' ? 'delay' : 'duration';
+}
+
+function getDurationDrafts(path: 'duration' | 'delay'): WeakMap<object, DurationConfig> {
+  return path === 'delay' ? delayDrafts : durationDrafts;
 }
 
 function renderDurationParameters(
@@ -789,7 +807,7 @@ function renderOutputField(
     updateFields((fields) => fields.filter((_, itemIndex) => itemIndex !== index));
   };
 
-  return h('article', { class: 'sim-output-item', key: `${field.key}-${index}` }, [
+  return h('article', { class: 'sim-output-item', key: `output-${index}` }, [
     h('div', { class: 'sim-output-item-title' }, [
       h('strong', null, field.key || `Output ${index + 1}`),
       h('button', {
@@ -803,10 +821,8 @@ function renderOutputField(
       h('input', {
         type: 'text',
         defaultValue: field.key,
-        onInput: (event: Event) => update({ key: (event.currentTarget as HTMLInputElement).value }),
         onChange: (event: Event) => update({ key: (event.currentTarget as HTMLInputElement).value }),
-        onBlur: (event: Event) => update({ key: (event.currentTarget as HTMLInputElement).value }),
-        onKeyUp: (event: Event) => update({ key: (event.currentTarget as HTMLInputElement).value })
+        onBlur: (event: Event) => update({ key: (event.currentTarget as HTMLInputElement).value })
       })
     ]),
     h('label', null, [
@@ -896,12 +912,16 @@ function SimulationCheckbox(props: Entry): unknown {
     getValue: () => {
       const value = readRawSimulationValue(props.element.businessObject, props.path);
 
-      return value === undefined ? true : value === true || value === 'true';
+      return value === undefined ? checkboxDefaultValue(props) : value === true || value === 'true';
     },
     setValue: (value: boolean) => {
       updateSimulationValue(props.element, getConfigKind(props.element), props.path, value, bpmnFactory, modeling);
     }
   });
+}
+
+function checkboxDefaultValue(props: Entry): boolean {
+  return props.path.length === 1 && props.path[0] === 'enabled';
 }
 
 function isOutputObjectListEdited(...args: unknown[]): boolean {
@@ -912,8 +932,9 @@ function isOutputObjectListEdited(...args: unknown[]): boolean {
 
 function isDurationDistributionEdited(...args: unknown[]): boolean {
   const props = args[1] as Entry | undefined;
+  const path = props ? getDurationConfigPath(props) : 'duration';
 
-  return Boolean(props?.element && readSimulationConfig(props.element.businessObject).duration);
+  return Boolean(props?.element && readSimulationConfig(props.element.businessObject)[path]);
 }
 
 function isArrivalDistributionEdited(...args: unknown[]): boolean {

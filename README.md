@@ -223,7 +223,10 @@ Die Oberfläche enthält:
 - einklappbare linke Sidebar-Bereiche fuer Übersicht, Ressourcen, Bottlenecks, Pfade, Statistik, Event Log, Warnungen und Export
 - größenänderbare linke und rechte Sidebar
 - Ergebnisbereich mit Statistik-Tabelle, Event Log, Warnungen und Export Buttons
-- separater Dashboard-Tab mit interaktiven Plotly-Diagrammen
+- separater `Performance`-Tab mit interaktiven Plotly-Diagrammen fuer Service- und Wartezeiten
+- separater `Process Flow`-Tab fuer Event-Log-basierte Process-Data-Science-Visualisierungen
+- Event-Log-Import fuer CSV-, JSON-, XES- und MXML-Logs, unabhaengig davon, ob sie zum aktuell geladenen BPMN-Modell passen
+- Mapping-Dialog fuer CSV-/JSON-Importe, um Quellfelder auf Case ID, Activity, Start/End Time, Resource, Process ID und Variables zu legen
 
 Wenn der bpmn-js-token-simulation-Schalter auf AN steht, erzeugt der obere Start-Button zuerst den vollständigen DES-Lauf und spielt danach dessen Timeline über den zentralen PlaybackController im Diagramm ab. Der urspruengliche interaktive Simulator aus bpmn-js-token-simulation wird nicht geladen; dessen Event-Trigger, Task-Pausen, Gateway-Umschaltungen, Reset/Pause-Controls und Event-Log sind entfernt. Waehrend des Abspielens aktualisieren sich Statistik, Task-Wartezeitboxen, Task-Fehlerzaehler, Event-/Gateway-Haeufigkeiten, Aktivitaetsfarben und Kantenstaerken fortlaufend.
 
@@ -244,7 +247,9 @@ Wenn der bpmn-js-token-simulation-Schalter auf AN steht, erzeugt der obere Start
 
 Exporte sind als JSON, Simulation Results CSV und Event Log CSV vorbereitet. Beide CSV-Formate verwenden Semikolon als Trennzeichen. Das Event Log CSV enthält CaseID, Task-/Event-ID, Name, Startzeit, Endzeit für Tasks, Resource für Tasks und die aktuellen Prozessvariablen als JSON-String.
 
-Der Dashboard-Tab visualisiert Service- und Wartezeiten für jeden BPMN-Prozess bzw. eingebetteten Subprozess, jeden Task und jede Ressource. Korrelierte Haupt- und Child-Prozesse bleiben im Dashboard getrennte Prozessserien. Die Prozess-Wartezeit ist die Summe aller Task-Wartezeiten je Prozessinstanz. Ein gruppiertes Balkendiagramm vergleicht Min, Max, Durchschnitt und Median. Zwei interaktive Plotly-Verteilungsdiagramme zeigen die Rohwerte für Service- und Wartezeiten und können gemeinsam zwischen Box- und Violin-Plots umgeschaltet werden; Violin ist der Default. Der Scope kann zwischen Gesamtansicht, Prozess, Tasks und Ressourcen umgeschaltet werden.
+Der `Performance`-Tab visualisiert Service- und Wartezeiten für jeden BPMN-Prozess bzw. eingebetteten Subprozess, jeden Task und jede Ressource. Korrelierte Haupt- und Child-Prozesse bleiben getrennte Prozessserien. Die Prozess-Wartezeit ist die Summe aller Task-Wartezeiten je Prozessinstanz. Ein gruppiertes Balkendiagramm vergleicht Min, Max, Durchschnitt und Median. Zwei interaktive Plotly-Verteilungsdiagramme zeigen die Rohwerte für Service- und Wartezeiten und können gemeinsam zwischen Box- und Violin-Plots umgeschaltet werden; Violin ist der Default. Der Scope kann zwischen Gesamtansicht, Prozess, Tasks und Ressourcen umgeschaltet werden. Bei geladenen externen Event Logs wird auch der Performance-Tab aus diesen Daten gespeist.
+
+Der `Process Flow`-Tab verwendet das Simulations-Event-Log oder ein per `Import Event Log` hochgeladenes CSV/JSON/XES/MXML-Log. Er zeigt Gantt-Charts pro Prozessinstanz und Ressource, eine Resource-Activity-Matrix, Resource-Transitions als Graph und Heatmap sowie Directly-Follows-Beziehungen der Aktivitäten als Graph und Heatmap. Externe Logs müssen nicht mit dem aktuellen BPMN-Modell übereinstimmen. Instant-Events ohne Dauer werden standardmäßig ausgeblendet und können über `Include events without duration` wieder eingeblendet werden. Alle Performance- und Process-Flow-Visualisierungen besitzen einen Full-screen-Button.
 
 ## Beispielmodell
 

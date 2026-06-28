@@ -1,7 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { buildDashboardSeries, sampleStats } from '../../src/visualization/SimulationDashboard';
+import {
+  buildDashboardSeries,
+  buildDashboardSeriesFromEventLog,
+  eventLogProcessInstanceCount,
+  sampleStats
+} from '../../src/visualization/SimulationDashboard';
 import type { SimulationResult } from '../../src/types/simulation';
+import type { EventLogDataset } from '../../src/types/eventLog';
 
 test('SimulationDashboard builds process, task and resource time series', () => {
   const series = buildDashboardSeries(createResult());
@@ -68,6 +74,30 @@ test('SimulationDashboard keeps correlated process scopes separate', () => {
   ]);
   assert.deepEqual(processSeries[0].serviceSamples, [5]);
   assert.deepEqual(processSeries[1].serviceSamples, [7]);
+});
+
+test('SimulationDashboard builds performance series from imported event logs', () => {
+  const dataset: EventLogDataset = {
+    sourceName: 'external.csv',
+    sourceKind: 'upload',
+    importedAt: new Date('2026-06-15T08:00:00'),
+    warnings: [],
+    records: [
+      eventRecord('C1', 'A', 'Register', 'Alice', '2026-06-15T08:00:00', '2026-06-15T08:05:00', 0),
+      eventRecord('C1', 'B', 'Approve', 'Bob', '2026-06-15T08:07:00', '2026-06-15T08:10:00', 1),
+      eventRecord('C2', 'A', 'Register', 'Alice', '2026-06-15T09:00:00', '2026-06-15T09:04:00', 2)
+    ]
+  };
+  const series = buildDashboardSeriesFromEventLog(dataset);
+  const process = series.find((entry) => entry.scope === 'process');
+  const register = series.find((entry) => entry.id === 'task:A');
+  const bob = series.find((entry) => entry.id === 'resource:Bob');
+
+  assert.equal(eventLogProcessInstanceCount(dataset), 2);
+  assert.deepEqual(process?.serviceSamples, [8, 4]);
+  assert.deepEqual(process?.waitSamples, [2, 0]);
+  assert.deepEqual(register?.serviceSamples, [5, 4]);
+  assert.deepEqual(bob?.waitSamples, [2]);
 });
 
 function createResult(): SimulationResult {
@@ -210,5 +240,25 @@ function logEntry(
     waitTime,
     waitTimeExcludingOffTimetable,
     serviceTimeExcludingOffTimetable
+  };
+}
+
+function eventRecord(
+  caseId: string,
+  activityId: string,
+  activityName: string,
+  resource: string,
+  startTime: string,
+  endTime: string,
+  sequence: number
+): EventLogDataset['records'][number] {
+  return {
+    caseId,
+    activityId,
+    activityName,
+    resource,
+    startTime: new Date(startTime),
+    endTime: new Date(endTime),
+    sequence
   };
 }

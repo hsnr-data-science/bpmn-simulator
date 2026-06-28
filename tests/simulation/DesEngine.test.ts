@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import type { SimFlow, SimModel, SimNode } from '../../src/types/bpmn';
 import { DesEngine } from '../../src/simulation/DesEngine';
+import { eventLogDatasetFromSimulationResult } from '../../src/simulation/EventLogDataset';
 import { createProgressResult } from '../../src/visualization/DesTokenAnimator';
 import { buildDashboardSeries } from '../../src/visualization/SimulationDashboard';
 
@@ -16,6 +17,35 @@ test('DES draws fixed task duration and completes the process after that duratio
   assert.equal(result.completedCases, 1);
   assert.equal(result.cases[0].cycleTime, 5 / 60);
   assert.equal(result.elementMetrics.find((metric) => metric.elementId === 'task')?.serviceTime, 5);
+});
+
+test('DES delays activity starts before drawing the service duration', () => {
+  const model = createLinearModel();
+  const task = model.nodes.get('task');
+
+  if (!task) {
+    throw new Error('task missing');
+  }
+
+  task.params.delay = {
+    type: 'fixed',
+    mean: 10
+  };
+
+  const result = new DesEngine(model, {
+    numberOfRuns: 1,
+    randomSeed: 1,
+    animationSpeed: 1,
+    collectTraces: true
+  }).run();
+  const taskMetrics = result.elementMetrics.find((metric) => metric.elementId === 'task');
+  const taskStart = result.log.find((entry) => entry.eventType === 'TASK_START');
+
+  assert.equal(result.completedCases, 1);
+  assert.equal(result.cases[0].cycleTime, 15 / 60);
+  assert.equal(taskMetrics?.waitTime, 10);
+  assert.equal(taskMetrics?.serviceTime, 5);
+  assert.equal(taskStart?.time, 10 / 60);
 });
 
 test('DES uses resource calendars for task start and working-time completion', () => {
@@ -361,6 +391,96 @@ test('DES exports event log CSV and simulation result CSV with resource metrics'
   assert.match(result.exports.simulationResultsCsv, /Resource;worker;worker;1;0;5;5;5;5;0;0;0;0;1/);
 });
 
+test('DES records concrete resource instances for event-log visualizations', () => {
+  const model = createLinearModel();
+  const task = model.nodes.get('task');
+
+  if (!task) {
+    throw new Error('task missing');
+  }
+
+  task.params.resource = {
+    resourceId: 'team',
+    capacity: 2
+  };
+
+  const result = new DesEngine(model, {
+    numberOfRuns: 1,
+    randomSeed: 1,
+    animationSpeed: 1,
+    collectTraces: true
+  }).run();
+  const taskStart = result.log.find((entry) => entry.eventType === 'TASK_START');
+  const dataset = eventLogDatasetFromSimulationResult(result);
+  const record = dataset.records.find((entry) => entry.activityId === 'task');
+
+  assert.equal(taskStart?.resourceId, 'team');
+  assert.equal(taskStart?.resourceInstanceId, 'team #1');
+  assert.equal(record?.resource, 'team');
+  assert.equal(record?.resourceInstance, 'team #1');
+});
+
+test('DES can bind repeated role work to the same resource instance within a process instance', () => {
+  const result = new DesEngine(createTwoTaskResourceModel(), {
+    numberOfRuns: 1,
+    randomSeed: 1,
+    animationSpeed: 1,
+    collectTraces: true
+  }).run();
+  const startsByCase = new Map<number, Map<string, string>>();
+
+  for (const entry of result.log) {
+    if (entry.eventType !== 'TASK_START' || entry.caseId === undefined || !entry.resourceInstanceId || !entry.elementId) {
+      continue;
+    }
+
+    const caseStarts = startsByCase.get(entry.caseId) ?? new Map<string, string>();
+
+    caseStarts.set(entry.elementId, entry.resourceInstanceId);
+    startsByCase.set(entry.caseId, caseStarts);
+  }
+
+  assert.equal(result.completedCases, 2);
+
+  for (const caseStarts of startsByCase.values()) {
+    assert.equal(caseStarts.get('task-2'), caseStarts.get('task-1'));
+  }
+});
+
+test('DES terminates open child processes when a parent process reaches a terminate end event', () => {
+  const result = new DesEngine(createParentTerminationModel(), {
+    numberOfRuns: 1,
+    randomSeed: 1,
+    animationSpeed: 1,
+    collectTraces: true
+  }).run();
+  const parent = result.cases.find((caseTrace) => caseTrace.trigger === 'arrival');
+  const child = result.cases.find((caseTrace) => caseTrace.trigger === 'subProcess');
+
+  assert.ok(parent);
+  assert.ok(child);
+  assert.equal(parent.status, 'completed');
+  assert.equal(child.parentCaseId, parent.id);
+  assert.equal(child.status, 'completed');
+  assert.equal(child.endTime, parent.endTime);
+  assert.equal(result.log.some((entry) => entry.caseId === child.id && entry.eventType === 'TASK_COMPLETE'), false);
+});
+
+test('DES derives child process case IDs from the parent case ID', () => {
+  const result = new DesEngine(createParentTerminationModel(), {
+    numberOfRuns: 1,
+    randomSeed: 1,
+    animationSpeed: 1,
+    collectTraces: true
+  }).run();
+  const parent = result.cases.find((caseTrace) => caseTrace.trigger === 'arrival');
+  const child = result.cases.find((caseTrace) => caseTrace.trigger === 'subProcess');
+
+  assert.ok(parent);
+  assert.ok(child);
+  assert.equal(child.id, parent.id * 1_000_000 + 1);
+});
+
 test('DES routes XOR conditions with variables from previous output objects', () => {
   const model = createConditionModel();
 
@@ -401,6 +521,124 @@ function createLinearModel(): SimModel {
   return {
     id: 'process',
     name: 'Process',
+    resources: new Map(),
+    nodes: new Map(nodes.map((item) => [item.id, item])),
+    flows: new Map(flows.map((item) => [item.id, item])),
+    startNodeIds: ['start'],
+    unsupportedElementIds: []
+  };
+}
+
+function createTwoTaskResourceModel(): SimModel {
+  const resource = {
+    resourceId: 'delivery_boy',
+    resourceName: 'Delivery Boy',
+    capacity: 2,
+    sameInstanceAsBefore: true
+  };
+  const nodes: SimNode[] = [
+    {
+      ...node('start', 'Start', 'startEvent', ['flow_start_task_1']),
+      params: {
+        arrival: {
+          type: 'fixed',
+          interval: 0,
+          numberOfCases: 2
+        }
+      }
+    },
+    {
+      ...node('task-1', 'Deliver Pizza', 'serviceTask', ['flow_task_1_task_2'], ['flow_start_task_1']),
+      params: {
+        duration: {
+          type: 'fixed',
+          mean: 10
+        },
+        resource
+      }
+    },
+    {
+      ...node('task-2', 'Take Payment', 'serviceTask', ['flow_task_2_end'], ['flow_task_1_task_2']),
+      params: {
+        duration: {
+          type: 'fixed',
+          mean: 1
+        },
+        resource
+      }
+    },
+    node('end', 'End', 'endEvent', [], ['flow_task_2_end'])
+  ];
+  const flows: SimFlow[] = [
+    flow('flow_start_task_1', 'start', 'task-1'),
+    flow('flow_task_1_task_2', 'task-1', 'task-2'),
+    flow('flow_task_2_end', 'task-2', 'end')
+  ];
+
+  return {
+    id: 'resourceProcess',
+    name: 'Resource Process',
+    resources: new Map(),
+    nodes: new Map(nodes.map((item) => [item.id, item])),
+    flows: new Map(flows.map((item) => [item.id, item])),
+    startNodeIds: ['start'],
+    unsupportedElementIds: []
+  };
+}
+
+function createParentTerminationModel(): SimModel {
+  const nodes: SimNode[] = [
+    node('start', 'Start', 'startEvent', ['flow_start_split']),
+    node('split', 'Split', 'parallelGateway', ['flow_split_sub', 'flow_split_wait'], ['flow_start_split']),
+    {
+      ...node('sub', 'Long Child Work', 'subProcess', [], ['flow_split_sub']),
+      subProcessStartIds: ['sub-start'],
+      subProcessEndIds: ['sub-end']
+    },
+    {
+      ...node('wait', 'Wait Before Terminate', 'task', ['flow_wait_terminate'], ['flow_split_wait']),
+      params: {
+        duration: {
+          type: 'fixed',
+          mean: 1
+        }
+      }
+    },
+    {
+      ...node('terminate', 'Terminate', 'endEvent', [], ['flow_wait_terminate']),
+      eventDefinitions: [{ type: 'terminate' }]
+    },
+    {
+      ...node('sub-start', 'Sub Start', 'startEvent', ['flow_sub_start_task']),
+      parentSubProcessId: 'sub'
+    },
+    {
+      ...node('sub-task', 'Long Task', 'task', ['flow_sub_task_end'], ['flow_sub_start_task']),
+      parentSubProcessId: 'sub',
+      params: {
+        duration: {
+          type: 'fixed',
+          mean: 120
+        }
+      }
+    },
+    {
+      ...node('sub-end', 'Sub End', 'endEvent', [], ['flow_sub_task_end']),
+      parentSubProcessId: 'sub'
+    }
+  ];
+  const flows: SimFlow[] = [
+    flow('flow_start_split', 'start', 'split'),
+    flow('flow_split_sub', 'split', 'sub'),
+    flow('flow_split_wait', 'split', 'wait'),
+    flow('flow_wait_terminate', 'wait', 'terminate'),
+    flow('flow_sub_start_task', 'sub-start', 'sub-task'),
+    flow('flow_sub_task_end', 'sub-task', 'sub-end')
+  ];
+
+  return {
+    id: 'terminationProcess',
+    name: 'Termination Process',
     resources: new Map(),
     nodes: new Map(nodes.map((item) => [item.id, item])),
     flows: new Map(flows.map((item) => [item.id, item])),

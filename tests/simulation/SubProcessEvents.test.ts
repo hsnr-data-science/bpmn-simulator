@@ -72,8 +72,49 @@ test('subprocess errors route only through the matching parent Boundary Error Ev
   assert.equal(executionCount(result, 'Event_0j8nk05'), 1);
 });
 
+test('nested subprocess escalation bubbles to the matching parent Boundary Escalation Event', async () => {
+  const model = await loadBpmnModel('tests/bpmn/reiseantrag-sim.bpmn');
+
+  makeTravelRequestTimeoutDeterministic(model);
+  const result = new DesEngine(model, simulationOptions()).run();
+
+  assert.equal(model.escalations?.get('Escalation_13t809g'), 'timeout');
+  assert.equal(model.nodes.get('Event_08b00a5')?.eventDefinitions?.[0]?.type, 'escalation');
+  assert.equal(model.nodes.get('Event_08b00a5')?.eventDefinitions?.[0]?.name, 'timeout');
+  assert.equal(executionCount(result, 'Event_08b00a5'), 1);
+  assert.equal(executionCount(result, 'Activity_1nd7ol5'), 1);
+  assert.equal(executionCount(result, 'Activity_0ohwbn1'), 1);
+  assert.equal(result.cases.some((caseTrace) => {
+    return caseTrace.trigger === 'subProcess' &&
+      caseTrace.triggerElementId === 'Activity_0qxrb5w' &&
+      caseTrace.status === 'failed' &&
+      caseTrace.errors.includes('timeout');
+  }), true);
+  assert.equal(result.completedCases, 1);
+});
+
+test('travel request approvals continue after nested timeout child processes are terminated', async () => {
+  const model = await loadBpmnModel('tests/bpmn/reiseantrag-sim.bpmn');
+
+  makeTravelRequestApprovalRunDeterministic(model);
+  const result = new DesEngine(model, simulationOptions()).run();
+  const approvalCompletions = result.log.filter((entry) => {
+    return entry.eventType === 'TASK_COMPLETE' && entry.elementId === 'Activity_1p40d5a';
+  });
+  const openCases = result.cases.filter((caseTrace) => caseTrace.status === 'running');
+
+  assert.equal(approvalCompletions.length, 120);
+  assert.equal(openCases.length, 0);
+  assert.equal(result.deadlockSuspicions, 0);
+  assert.ok(approvalCompletions.some((entry) => (entry.time ?? 0) > 44));
+});
+
 async function loadSubProcessModel(): Promise<SimModel> {
-  const xml = readFileSync('tests/bpmn/order-fulfillment-with-subprocess.bpmn', 'utf8');
+  return loadBpmnModel('tests/bpmn/order-fulfillment-with-subprocess.bpmn');
+}
+
+async function loadBpmnModel(path: string): Promise<SimModel> {
+  const xml = readFileSync(path, 'utf8');
   const { BpmnModdle } = await importBpmnModdle();
   const moddle = new BpmnModdle({ sim: simulationModdle });
   const { rootElement } = await moddle.fromXML(xml);
@@ -118,6 +159,74 @@ function makeDeterministic(model: SimModel): void {
 
   inStockFlow.params.branch = { probability: 1 };
   backorderFlow.params.branch = { probability: 0 };
+}
+
+function makeTravelRequestTimeoutDeterministic(model: SimModel): void {
+  const start = model.nodes.get('StartEventProcessStarted');
+  const approvalTask = model.nodes.get('Activity_1p40d5a');
+  const budgetTask = model.nodes.get('Activity_043qhjs');
+
+  if (!start || !approvalTask || !budgetTask) {
+    throw new Error('Travel request model is incomplete');
+  }
+
+  start.params.arrival = { type: 'fixed', interval: 0, numberOfCases: 1 };
+  approvalTask.params.duration = { type: 'fixed', mean: 20 };
+  budgetTask.params.duration = { type: 'fixed', mean: 1 };
+
+  for (const node of model.nodes.values()) {
+    if (node.kind === 'task' || node.kind === 'serviceTask' || node.kind === 'userTask') {
+      node.params.duration ??= { type: 'fixed', mean: 1 };
+      node.params.error = { probability: 0 };
+    }
+  }
+
+  setBranchProbability(model, 'Flow_0oizzlx', 0);
+  setBranchProbability(model, 'Flow_12xjdkl', 1);
+  setBranchProbability(model, 'Flow_1ccxo8r', 0);
+  setBranchProbability(model, 'Flow_0kytaok', 1);
+}
+
+function makeTravelRequestApprovalRunDeterministic(model: SimModel): void {
+  const start = model.nodes.get('StartEventProcessStarted');
+  const approvalTask = model.nodes.get('Activity_1p40d5a');
+
+  if (!start || !approvalTask) {
+    throw new Error('Travel request model is incomplete');
+  }
+
+  start.params.arrival = {
+    type: 'fixed',
+    interval: 30,
+    numberOfCases: 120,
+    weekdays: [1, 2, 3, 4, 5],
+    hourRanges: [{ start: 8, end: 17 }]
+  };
+  approvalTask.params.duration = { type: 'fixed', mean: 3 };
+
+  for (const node of model.nodes.values()) {
+    if (node.kind === 'task' || node.kind === 'serviceTask' || node.kind === 'userTask') {
+      node.params.duration ??= { type: 'fixed', mean: 1 };
+      node.params.error = { probability: 0 };
+    }
+  }
+
+  setBranchProbability(model, 'Flow_0oizzlx', 0);
+  setBranchProbability(model, 'Flow_12xjdkl', 1);
+  setBranchProbability(model, 'Flow_1ccxo8r', 0);
+  setBranchProbability(model, 'Flow_0kytaok', 1);
+}
+
+function setBranchProbability(model: SimModel, flowId: string, probability: number): void {
+  const flow = model.flows.get(flowId);
+
+  if (!flow) {
+    throw new Error(`Flow ${flowId} missing`);
+  }
+
+  flow.hasCondition = false;
+  flow.conditionExpression = undefined;
+  flow.params.branch = { probability };
 }
 
 function simulationOptions() {

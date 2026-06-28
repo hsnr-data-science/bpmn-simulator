@@ -17,6 +17,7 @@ import {
 type ConfigKind = 'task' | 'startEvent' | 'sequenceFlow';
 
 const PATH_TYPE_MAP: Record<string, string> = {
+  delay: 'sim:Duration',
   duration: 'sim:Duration',
   resource: 'sim:Resource',
   outputObject: 'sim:OutputObject',
@@ -105,7 +106,8 @@ export function updateDurationConfig(
   element: BpmnElement,
   duration: DurationConfig,
   bpmnFactory: BpmnFactory,
-  modeling: Modeling
+  modeling: Modeling,
+  path: 'duration' | 'delay' = 'duration'
 ): void {
   const businessObject = element.businessObject;
 
@@ -115,7 +117,7 @@ export function updateDurationConfig(
 
   const extensionElements = ensureExtensionElements(businessObject, bpmnFactory);
   const config = ensureConfig(extensionElements, 'task', bpmnFactory);
-  const durationElement = ensureChild(config, 'duration', bpmnFactory);
+  const durationElement = ensureChild(config, path, bpmnFactory);
 
   for (const attribute of ['type', 'mean', 'stddev', 'min', 'max', 'mode', 'lambda']) {
     delete durationElement[attribute];
@@ -280,6 +282,7 @@ function setConfigPath(
     delete target.name;
     delete target.weekdays;
     delete target.hourRanges;
+    delete target.sameInstanceAsBefore;
   }
 }
 

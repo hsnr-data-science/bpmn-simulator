@@ -45,7 +45,8 @@ export function buildSimulationTimeline(
         tokenId: entry.tokenId,
         elementId: entry.elementId,
         payload: {
-          resourceId: entry.resourceId
+          resourceId: entry.resourceId,
+          resourceInstanceId: entry.resourceInstanceId
         }
       });
     }
@@ -60,7 +61,8 @@ export function buildSimulationTimeline(
         tokenId: entry.tokenId,
         elementId: entry.elementId,
         payload: {
-          resourceId: entry.resourceId
+          resourceId: entry.resourceId,
+          resourceInstanceId: entry.resourceInstanceId
         }
       });
     }
@@ -173,6 +175,7 @@ function mapLogEntryToTimelineEvent(
       sourceCaseId: entry.sourceCaseId,
       sourceElementId: entry.sourceElementId,
       resourceId: entry.resourceId,
+      resourceInstanceId: entry.resourceInstanceId,
       variables: entry.variables
     }
   };

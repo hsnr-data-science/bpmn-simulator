@@ -1,4 +1,6 @@
+import type { EventLogDataset, EventLogRecord } from '../types/eventLog';
 import type { ElementMetrics, ResourceMetrics, SimulationLogEntry, SimulationResult } from '../types/simulation';
+import { bindDashboardFullscreen } from './DashboardFullscreen';
 import { workingTimeBetween } from '../simulation/ResourceCalendar';
 import {
   serviceTimeSamples,
@@ -8,6 +10,12 @@ import {
 
 type DashboardScope = 'all' | 'process' | 'task' | 'resource';
 type DistributionPlotType = 'box' | 'violin';
+
+type DashboardData = {
+  series: DashboardSeries[];
+  processInstances: number;
+  sourceName?: string;
+};
 
 export type DashboardSeries = {
   id: string;
@@ -50,6 +58,7 @@ export class SimulationDashboard {
   private readonly serviceBoxPlot: HTMLElement;
   private readonly waitBoxPlot: HTMLElement;
   private result?: SimulationResult;
+  private eventLogDataset?: EventLogDataset;
   private plotly?: PlotlyApi;
   private plotType: DistributionPlotType = 'violin';
   private timeAccountingMode: TimeAccountingMode = 'includingOffTimetable';
@@ -59,7 +68,7 @@ export class SimulationDashboard {
     this.root.innerHTML = `
       <header class="dashboard-header">
         <div>
-          <h1>Simulation Dashboard</h1>
+          <h1>Performance</h1>
           <p>Service and wait time analysis in minutes</p>
         </div>
         <div class="dashboard-controls">
@@ -83,16 +92,25 @@ export class SimulationDashboard {
       </header>
       <div class="dashboard-summary"></div>
       <section class="dashboard-chart-section">
-        <h2>Service and Wait Time Statistics</h2>
+        <div class="dashboard-section-header">
+          <h2>Service and Wait Time Statistics</h2>
+          <button type="button" class="dashboard-fullscreen-button" data-dashboard-fullscreen>Full screen</button>
+        </div>
         <div class="dashboard-chart dashboard-bar-chart"></div>
       </section>
       <div class="dashboard-distribution-grid">
         <section class="dashboard-chart-section">
-          <h2>Service Time Distribution</h2>
+          <div class="dashboard-section-header">
+            <h2>Service Time Distribution</h2>
+            <button type="button" class="dashboard-fullscreen-button" data-dashboard-fullscreen>Full screen</button>
+          </div>
           <div class="dashboard-chart dashboard-service-box"></div>
         </section>
         <section class="dashboard-chart-section">
-          <h2>Wait Time Distribution</h2>
+          <div class="dashboard-section-header">
+            <h2>Wait Time Distribution</h2>
+            <button type="button" class="dashboard-fullscreen-button" data-dashboard-fullscreen>Full screen</button>
+          </div>
           <div class="dashboard-chart dashboard-wait-box"></div>
         </section>
       </div>
@@ -113,18 +131,28 @@ export class SimulationDashboard {
         this.setPlotType(button.dataset.plotType === 'violin' ? 'violin' : 'box');
       });
     }
+    bindDashboardFullscreen(this.root, () => this.resize());
 
     this.renderEmpty();
   }
 
   async render(result: SimulationResult): Promise<void> {
     this.result = result;
+    this.eventLogDataset = undefined;
+    this.plotly = this.plotly ?? await loadPlotly();
+    await this.renderCharts();
+  }
+
+  async renderEventLog(dataset: EventLogDataset): Promise<void> {
+    this.result = undefined;
+    this.eventLogDataset = dataset;
     this.plotly = this.plotly ?? await loadPlotly();
     await this.renderCharts();
   }
 
   clear(): void {
     this.result = undefined;
+    this.eventLogDataset = undefined;
 
     if (this.plotly) {
       this.plotly.purge(this.barChart);
@@ -136,7 +164,7 @@ export class SimulationDashboard {
   }
 
   resize(): void {
-    if (!this.plotly || !this.result) {
+    if (!this.plotly || (!this.result && !this.eventLogDataset)) {
       return;
     }
 
@@ -151,18 +179,25 @@ export class SimulationDashboard {
   }
 
   private async renderCharts(): Promise<void> {
-    if (!this.result || !this.plotly) {
+    if (!this.plotly) {
       this.renderEmpty();
       return;
     }
 
-    const allSeries = buildDashboardSeries(this.result, this.timeAccountingMode);
+    const data = this.currentData();
+
+    if (!data) {
+      this.renderEmpty();
+      return;
+    }
+
+    const allSeries = data.series;
     const scope = this.scopeSelect.value as DashboardScope;
     const series = scope === 'all'
       ? allSeries
       : allSeries.filter((entry) => entry.scope === scope);
 
-    this.renderSummary(series, processInstanceCount(this.result));
+    this.renderSummary(series, data.processInstances, data.sourceName);
     this.clearEmptyPlaceholders();
 
     await Promise.all([
@@ -187,7 +222,26 @@ export class SimulationDashboard {
     ]);
   }
 
-  private renderSummary(series: DashboardSeries[], processInstances: number): void {
+  private currentData(): DashboardData | undefined {
+    if (this.eventLogDataset) {
+      return {
+        series: buildDashboardSeriesFromEventLog(this.eventLogDataset),
+        processInstances: eventLogProcessInstanceCount(this.eventLogDataset),
+        sourceName: this.eventLogDataset.sourceName
+      };
+    }
+
+    if (!this.result) {
+      return undefined;
+    }
+
+    return {
+      series: buildDashboardSeries(this.result, this.timeAccountingMode),
+      processInstances: processInstanceCount(this.result)
+    };
+  }
+
+  private renderSummary(series: DashboardSeries[], processInstances: number, sourceName?: string): void {
     const serviceSamples = series.flatMap((entry) => entry.serviceSamples);
     const waitSamples = series.flatMap((entry) => entry.waitSamples);
     const serviceStats = sampleStats(serviceSamples);
@@ -195,12 +249,12 @@ export class SimulationDashboard {
 
     this.summary.innerHTML = `
       <div>
-        <span>Process Instances</span>
-        <strong>${processInstances}</strong>
+        <span>${sourceName ? 'Source' : 'Process Instances'}</span>
+        <strong>${sourceName ? escapeHtml(sourceName) : processInstances}</strong>
       </div>
       <div>
-        <span>Service Samples</span>
-        <strong>${serviceSamples.length}</strong>
+        <span>${sourceName ? 'Process Instances' : 'Service Samples'}</span>
+        <strong>${sourceName ? processInstances : serviceSamples.length}</strong>
       </div>
       <div>
         <span>Service Median</span>
@@ -217,10 +271,10 @@ export class SimulationDashboard {
     this.summary.innerHTML = `
       <div>
         <span>Status</span>
-        <strong>No simulation results</strong>
+        <strong>No simulation results or event log</strong>
       </div>
     `;
-    this.barChart.innerHTML = '<p class="dashboard-empty">Run a simulation to populate the dashboard.</p>';
+    this.barChart.innerHTML = '<p class="dashboard-empty">Run a simulation or import an event log to populate the dashboard.</p>';
     this.serviceBoxPlot.innerHTML = '<p class="dashboard-empty">No service-time samples available.</p>';
     this.waitBoxPlot.innerHTML = '<p class="dashboard-empty">No wait-time samples available.</p>';
   }
@@ -256,6 +310,104 @@ export function buildDashboardSeries(
   const resourceSeries = result.resourceMetrics.map((metric) => resourceSeriesEntry(metric, mode));
 
   return [...processSeries, ...taskSeries, ...resourceSeries];
+}
+
+export function buildDashboardSeriesFromEventLog(dataset: EventLogDataset): DashboardSeries[] {
+  const recordsByCase = groupBy(
+    dataset.records
+      .filter(hasDuration)
+      .sort(compareEventLogRecords),
+    (record) => record.caseId
+  );
+  const processById = new Map<string, DashboardSeries>();
+  const taskById = new Map<string, DashboardSeries>();
+  const resourceById = new Map<string, DashboardSeries>();
+
+  for (const records of recordsByCase.values()) {
+    const processService = new Map<string, number>();
+    const processWait = new Map<string, number>();
+    let previousEnd: Date | undefined;
+
+    for (const record of records) {
+      const processId = record.processId || 'event-log';
+      const service = durationMinutes(record);
+      const wait = previousEnd
+        ? Math.max(0, (record.startTime.getTime() - previousEnd.getTime()) / 60_000)
+        : 0;
+
+      processService.set(processId, (processService.get(processId) ?? 0) + service);
+      processWait.set(processId, (processWait.get(processId) ?? 0) + wait);
+      pushSamples(taskById, `task:${record.activityId}`, `Task: ${record.activityName}`, 'task', service, wait);
+
+      if (record.resource) {
+        pushSamples(
+          resourceById,
+          `resource:${record.resource}`,
+          `Resource: ${record.resource}`,
+          'resource',
+          service,
+          wait
+        );
+      }
+
+      previousEnd = record.endTime ?? record.startTime;
+    }
+
+    for (const [processId, service] of processService.entries()) {
+      const label = processId === 'event-log' ? 'Process: Event Log' : `Process: ${processId}`;
+
+      pushSamples(processById, `process:${processId}`, label, 'process', service, processWait.get(processId) ?? 0);
+    }
+  }
+
+  return [
+    ...processById.values(),
+    ...taskById.values(),
+    ...resourceById.values()
+  ];
+}
+
+export function eventLogProcessInstanceCount(dataset: EventLogDataset): number {
+  return new Set(dataset.records.map((record) => record.caseId)).size;
+}
+
+function pushSamples(
+  map: Map<string, DashboardSeries>,
+  id: string,
+  label: string,
+  scope: DashboardSeries['scope'],
+  service: number,
+  wait: number
+): void {
+  const series = map.get(id) ?? {
+    id,
+    label,
+    scope,
+    serviceSamples: [],
+    waitSamples: []
+  };
+
+  series.serviceSamples.push(normalizeMinutes(service));
+  series.waitSamples.push(normalizeMinutes(wait));
+  map.set(id, series);
+}
+
+function hasDuration(record: EventLogRecord): boolean {
+  return Boolean(record.endTime && record.endTime.getTime() !== record.startTime.getTime());
+}
+
+function durationMinutes(record: EventLogRecord): number {
+  return Math.max(0, ((record.endTime?.getTime() ?? record.startTime.getTime()) - record.startTime.getTime()) / 60_000);
+}
+
+function compareEventLogRecords(left: EventLogRecord, right: EventLogRecord): number {
+  const startDifference = left.startTime.getTime() - right.startTime.getTime();
+
+  if (startDifference) {
+    return startDifference;
+  }
+
+  return left.sequence - right.sequence;
 }
 
 function buildProcessSeries(result: SimulationResult, mode: TimeAccountingMode): DashboardSeries[] {
@@ -612,6 +764,20 @@ function shiftQueue(map: Map<string, number[]>, key: string): number | undefined
   return map.get(key)?.shift();
 }
 
+function groupBy<T>(values: T[], keyFor: (value: T) => string): Map<string, T[]> {
+  const grouped = new Map<string, T[]>();
+
+  for (const value of values) {
+    const key = keyFor(value);
+    const entries = grouped.get(key) ?? [];
+
+    entries.push(value);
+    grouped.set(key, entries);
+  }
+
+  return grouped;
+}
+
 function formatMinutes(value: number): string {
   return Number.isFinite(value) ? `${formatNumber(value)}m` : '-';
 }
@@ -630,6 +796,14 @@ function formatNumber(value: number): string {
   }
 
   return value.toFixed(2);
+}
+
+function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
 }
 
 function requireElement<T extends Element>(root: ParentNode, selector: string): T {

@@ -4,6 +4,7 @@ type Canvas = {
   addMarker(elementId: string, marker: string): void;
   removeMarker(elementId: string, marker: string): void;
   getContainer(): HTMLElement;
+  getRootElement?(): DiagramElement | undefined;
 };
 
 type DiagramElement = {
@@ -13,6 +14,7 @@ type DiagramElement = {
   width?: number;
   height?: number;
   waypoints?: Array<{ x: number; y: number }>;
+  parent?: DiagramElement;
 };
 
 type ElementRegistry = {
@@ -43,8 +45,10 @@ export class TimelineOverlayRenderer {
 
   render(state: VisualState): void {
     this.clear();
-    this.renderMarkers(state);
-    this.renderTokens(state);
+    const visibleState = this.filterVisibleState(state);
+
+    this.renderMarkers(visibleState);
+    this.renderTokens(visibleState);
   }
 
   clear(): void {
@@ -178,6 +182,56 @@ export class TimelineOverlayRenderer {
       // Some semantic BPMN elements have no rendered diagram shape.
     }
   }
+
+  private filterVisibleState(state: VisualState): VisualState {
+    return {
+      ...state,
+      activeElements: state.activeElements.filter((elementId) => this.isVisibleElement(elementId)),
+      completedElements: state.completedElements.filter((elementId) => this.isVisibleElement(elementId)),
+      waitingTokens: state.waitingTokens.filter((token) => this.isVisibleToken(token)),
+      warnings: state.warnings.filter((warning) => !warning.elementId || this.isVisibleElement(warning.elementId)),
+      tokens: state.tokens.filter((token) => this.isVisibleToken(token))
+    };
+  }
+
+  private isVisibleToken(token: VisualTokenState): boolean {
+    if (token.status === 'moving') {
+      return Boolean(
+        (token.sequenceFlowId && this.isVisibleElement(token.sequenceFlowId)) ||
+        (token.sourceElementId && this.isVisibleElement(token.sourceElementId)) ||
+        (token.targetElementId && this.isVisibleElement(token.targetElementId))
+      );
+    }
+
+    return Boolean(token.elementId && this.isVisibleElement(token.elementId));
+  }
+
+  private isVisibleElement(elementId: string): boolean {
+    const element = this.elementRegistry.get(elementId);
+    const root = this.canvas.getRootElement?.();
+
+    if (!element) {
+      return false;
+    }
+
+    if (!root) {
+      return true;
+    }
+
+    const elementRoot = findElementRoot(element);
+
+    return elementRoot?.id === root.id || element.id === root.id;
+  }
+}
+
+function findElementRoot(element: DiagramElement): DiagramElement {
+  let current = element;
+
+  while (current.parent) {
+    current = current.parent;
+  }
+
+  return current;
 }
 
 function groupNodeTokens(tokens: VisualTokenState[]): Array<{
@@ -312,6 +366,7 @@ function createWarningGroup(warning: VisualWarning, point: Point): SVGGElement {
   const group = document.createElementNS(SVG_NS, 'g');
   const rect = document.createElementNS(SVG_NS, 'rect');
   const text = document.createElementNS(SVG_NS, 'text');
+  const title = document.createElementNS(SVG_NS, 'title');
 
   group.setAttribute('class', 'des-warning-token');
   group.setAttribute('transform', `translate(${formatCoordinate(point.x)}, ${formatCoordinate(point.y)})`);
@@ -324,7 +379,8 @@ function createWarningGroup(warning: VisualWarning, point: Point): SVGGElement {
   text.setAttribute('text-anchor', 'middle');
   text.setAttribute('dominant-baseline', 'central');
   text.textContent = '!';
-  group.append(rect, text);
+  title.textContent = warning.message;
+  group.append(title, rect, text);
 
   return group;
 }

@@ -22,7 +22,9 @@ Die Anwendung besteht aus:
 - Linke Sidebar mit Uebersicht, Ressourcen, Bottlenecks, Pfaden, Statistik, Event Log, Warnungen und Export.
 - Zentralem BPMN Modeler.
 - Rechtem Properties Panel fuer BPMN- und Simulationsparameter.
-- Separatem Dashboard-Tab fuer interaktive Plotly-Diagramme.
+- Separatem `Performance`-Tab fuer Service-/Wartezeitdiagramme.
+- Separatem `Process Flow`-Tab fuer Event-Log-Analysen und Process-Data-Science-Visualisierungen.
+- `Import Event Log` in der Toolbar fuer externe CSV-, JSON-, XES- oder MXML-Logs.
 
 ![Simple Order Modeler](assets/simple-order-modeler.png)
 
@@ -100,7 +102,7 @@ Ressourcen werden in der linken Sidebar gepflegt. Jede Ressource hat:
 - Working Days
 - Working Hours in Stundenbloecken
 
-Die Kalender werden in der Simulation verwendet. Warte- und Bearbeitungszeiten koennen sowohl inklusive als auch exklusive Off-Timetable Hours ausgewertet werden. Der Umschalter `Including off-hours` / `Working hours only` wirkt auf Sidebar, Dashboard und Heatmap.
+Die Kalender werden in der Simulation verwendet. Warte- und Bearbeitungszeiten koennen sowohl inklusive als auch exklusive Off-Timetable Hours ausgewertet werden. Der Umschalter `Including off-hours` / `Working hours only` wirkt auf Sidebar, Performance-Tab und Heatmap.
 
 ## Gateways und Sequence Flows
 
@@ -194,9 +196,9 @@ Die Task-Statistik umfasst:
 - Fehleranzahl
 - Output-Variablen
 
-## Dashboard
+## Performance
 
-Der Dashboard-Tab zeigt Service- und Wartezeiten fuer:
+Der `Performance`-Tab zeigt Service- und Wartezeiten fuer:
 
 - jeden BPMN-Prozess bzw. eingebetteten Subprozess,
 - jeden Task,
@@ -204,14 +206,49 @@ Der Dashboard-Tab zeigt Service- und Wartezeiten fuer:
 
 Korrelierte Haupt- und Child-Prozesse werden bewusst getrennt ausgewertet. Die Prozess-Wartezeit ist die Summe der Task-Wartezeiten pro Prozessinstanz.
 
-Das Dashboard enthaelt:
+Die Performance-Ansicht enthaelt:
 
 - gruppierte Balkendiagramme fuer Min, Max, Avg und Median,
 - Violin-Plots als Default,
 - optional Box-Plots,
 - Scope-Filter fuer All, Process, Tasks und Resources.
+- Full-screen-Buttons pro Visualisierung.
+
+Wenn ein externes Event Log geladen wurde, nutzt der `Performance`-Tab dieses Event Log als Datenquelle. Service Time wird aus Start- und Endzeit berechnet; Waiting Time wird als Zeitluecke zwischen direkt aufeinanderfolgenden Aktivitaeten derselben Prozessinstanz interpretiert.
 
 ![Simple Order Dashboard](assets/simple-order-dashboard.png)
+
+## Process Flow
+
+Der `Process Flow`-Tab nutzt Event-Log-Daten. Wenn kein externes Log geladen ist, wird nach einem Simulationslauf das DES-Event-Log der Simulation verwendet. Mit `Import Event Log` kann ein externes Log geladen werden; es muss nicht zum aktuell geladenen BPMN-Modell passen.
+
+Instant-Events ohne Dauer werden standardmaessig ausgeblendet. Als Event ohne Dauer gilt ein Log-Eintrag ohne Endzeit oder mit identischer Start- und Endzeit. Mit `Include events without duration` koennen diese Eintraege fuer alle Process-Flow-Visualisierungen gemeinsam wieder eingeblendet werden.
+
+Unterstuetzt werden:
+
+- CSV mit Semikolon, Komma oder Tab als Trennzeichen.
+- Das native `Event Log CSV` des Simulators.
+- JSON-Arrays mit Event-Records.
+- Vollstaendige `SimulationResult`-JSON-Exporte; daraus wird das Event Log extrahiert.
+- XES-Logs mit `trace`, `event`, `concept:name`, `time:timestamp`, optional `lifecycle:transition` und `org:resource`.
+- MXML-Logs mit `ProcessInstance` und `AuditTrailEntry`.
+
+Erwartete Spalten bzw. Felder sind Case-ID, Aktivitaetsname, Startzeit, optional Endzeit, optional Ressource und optional Variablen als JSON-String. Typische Process-Mining-Namen wie `case:concept:name`, `concept:name`, `time:timestamp` und `org:resource` werden ebenfalls erkannt.
+
+Bei CSV- und JSON-Dateien wird vor dem Import ein Mapping-Dialog angezeigt. Dort werden die Quellfelder auf das interne Event-Log-Modell gemappt: Case ID, Activity ID, Activity Name, Start Time, End Time, Resource, Process ID und Variables JSON. Der Simulator schlaegt ein Mapping anhand gaengiger Feldnamen vor, das vor dem Import angepasst werden kann.
+
+Die Process-Flow-Ansicht enthaelt:
+
+- Gantt-Chart der Aktivitaeten pro Prozessinstanz.
+- Gantt-Chart der Aktivitaeten pro Ressource.
+- Resource-Activity-Matrix als Heatmap.
+- Resource Graph fuer direkte Ressourcenuebergaenge.
+- Resource Transition Matrix als Heatmap.
+- Directly-Follows Activity Graph.
+- Activity Transition Matrix als Heatmap.
+- Full-screen-Buttons pro Visualisierung.
+
+Eine Resource-Verbindung `X -> Y` entsteht, wenn innerhalb derselben Prozessinstanz eine Aktivitaet von Ressource `X` unmittelbar vor einer Aktivitaet von Ressource `Y` liegt. Eine Activity-Verbindung `A -> B` entsteht analog fuer direkt aufeinanderfolgende Aktivitaeten.
 
 ## Exporte
 
@@ -245,4 +282,3 @@ Vorbereitet, aber noch nicht vollstaendig implementiert:
 - Multi-Instance Activities
 
 Nicht unterstuetzte Elemente brechen die Simulation nicht ab. Sie werden transparent behandelt, erzeugen Warnungen und werden im Diagramm markiert.
-

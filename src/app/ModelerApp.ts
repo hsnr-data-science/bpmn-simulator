@@ -19,19 +19,28 @@ import {
 } from '../simulation/ResourceCalendar';
 import { SimulationRunner } from '../simulation/SimulationRunner';
 import {
-  serviceTimeSamples,
-  totalServiceTime,
-  totalWaitTime,
-  type TimeAccountingMode,
-  waitTimeSamples
-} from '../simulation/TimeAccounting';
+  eventLogDatasetFromImportPreview,
+  eventLogDatasetFromSimulationResult,
+  prepareEventLogImport
+} from '../simulation/EventLogDataset';
+import type { TimeAccountingMode } from '../simulation/TimeAccounting';
 import type { BpmnBusinessObject, BpmnDefinitions, BpmnElement, BpmnFactory, Modeling, SimModel, SimNode } from '../types/bpmn';
-import type { ElementMetrics, ResourceMetrics, SimulationResource, SimulationResult, Weekday } from '../types/simulation';
+import type {
+  EventLogDataset,
+  EventLogImportMapping,
+  EventLogImportOptions,
+  EventLogImportPreview,
+  EventLogMappingTarget,
+  EventLogTimestampFormat
+} from '../types/eventLog';
+import type { SimulationResource, SimulationResult, Weekday } from '../types/simulation';
 import { SimulationPropertiesProviderModule } from '../properties/SimulationPropertiesProvider';
 import { DesTokenSimulationModule } from '../visualization/DesTokenSimulationModule';
 import { DesTokenAnimator } from '../visualization/DesTokenAnimator';
 import { HeatmapOverlayManager } from '../visualization/HeatmapOverlayManager';
-import { buildDashboardSeries, SimulationDashboard } from '../visualization/SimulationDashboard';
+import { ProcessFlowDashboard } from '../visualization/ProcessFlowDashboard';
+import { ProcessStatisticsDashboard } from '../visualization/ProcessStatisticsDashboard';
+import { SimulationDashboard } from '../visualization/SimulationDashboard';
 import { SimulationLogPanel } from '../visualization/SimulationLogPanel';
 import { TokenOverlayManager } from '../visualization/TokenOverlayManager';
 
@@ -50,10 +59,6 @@ type EventBus = {
   fire(event: string, payload?: Record<string, unknown>): void;
 };
 
-type ElementRegistry = {
-  get(elementId: string): BpmnElement | undefined;
-};
-
 type ToggleMode = {
   _active?: boolean;
 };
@@ -67,6 +72,7 @@ type AppElements = {
   demoModel: HTMLSelectElement;
   emptyDiagram: HTMLButtonElement;
   importDiagram: HTMLButtonElement;
+  importEventLog: HTMLButtonElement;
   exportDiagram: HTMLButtonElement;
   runSimulation: HTMLButtonElement;
   pauseSimulation: HTMLButtonElement;
@@ -79,13 +85,28 @@ type AppElements = {
   exportResultsCsv: HTMLButtonElement;
   exportEventLogCsv: HTMLButtonElement;
   modelerTab: HTMLButtonElement;
-  dashboardTab: HTMLButtonElement;
+  performanceTab: HTMLButtonElement;
+  statisticsTab: HTMLButtonElement;
+  processFlowTab: HTMLButtonElement;
   workspace: HTMLElement;
-  dashboardView: HTMLElement;
-  dashboardRoot: HTMLElement;
+  performanceView: HTMLElement;
+  performanceRoot: HTMLElement;
+  statisticsView: HTMLElement;
+  statisticsRoot: HTMLElement;
+  processFlowView: HTMLElement;
+  processFlowRoot: HTMLElement;
   leftResizer: HTMLElement;
   rightResizer: HTMLElement;
   fileInput: HTMLInputElement;
+  eventLogFileInput: HTMLInputElement;
+  eventLogMapperDialog: HTMLElement;
+  eventLogMapperTitle: HTMLElement;
+  eventLogMapperFields: HTMLElement;
+  eventLogTimestampFormat: HTMLSelectElement;
+  eventLogInstantHandling: HTMLSelectElement;
+  eventLogMapperPreview: HTMLElement;
+  eventLogMapperCancel: HTMLButtonElement;
+  eventLogMapperImport: HTMLButtonElement;
   seed: HTMLInputElement;
   simulationStartTime: HTMLInputElement;
   simulationEndTime: HTMLInputElement;
@@ -99,17 +120,10 @@ type AppElements = {
   animationSpeedValue: HTMLElement;
   timeAccountingButtons: HTMLButtonElement[];
   statusLine: HTMLElement;
-  metricCompleted: HTMLElement;
-  metricFailed: HTMLElement;
-  metricAvgCycle: HTMLElement;
-  metricP90Cycle: HTMLElement;
   resourceList: HTMLElement;
-  bottleneckList: HTMLOListElement;
-  pathList: HTMLOListElement;
-  statsTable: HTMLElement;
-  resourceStatsTable: HTMLElement;
   eventLogList: HTMLUListElement;
   warningList: HTMLUListElement;
+  clearWarnings: HTMLButtonElement;
   logList: HTMLUListElement;
 };
 
@@ -120,16 +134,19 @@ export class ModelerApp {
   private readonly heatmapOverlays: HeatmapOverlayManager;
   private readonly tokenAnimator: DesTokenAnimator;
   private readonly dashboard: SimulationDashboard;
+  private readonly processStatisticsDashboard: ProcessStatisticsDashboard;
+  private readonly processFlowDashboard: ProcessFlowDashboard;
   private readonly eventLogPanel: SimulationLogPanel;
   private readonly warningPanel: SimulationLogPanel;
   private readonly elements: AppElements;
   private readonly runner = new SimulationRunner();
   private lastResult: SimulationResult | undefined;
   private displayedResult: SimulationResult | undefined;
-  private selectedTaskId: string | undefined;
+  private uploadedEventLogDataset: EventLogDataset | undefined;
+  private pendingEventLogImport: EventLogImportPreview | undefined;
   private tokenSimulationActive = false;
   private simulationRunId = 0;
-  private activeView: 'modeler' | 'dashboard' = 'modeler';
+  private activeView: 'modeler' | 'performance' | 'statistics' | 'processFlow' = 'modeler';
   private timeAccountingMode: TimeAccountingMode = 'includingOffTimetable';
   private estimatedSimulationEndTime: number | undefined;
   private simulationEndTimeExplicit = false;
@@ -169,14 +186,14 @@ export class ModelerApp {
     );
 
     this.elements = this.collectElements();
-    this.dashboard = new SimulationDashboard(this.elements.dashboardRoot);
+    this.dashboard = new SimulationDashboard(this.elements.performanceRoot);
+    this.processStatisticsDashboard = new ProcessStatisticsDashboard(this.elements.statisticsRoot);
+    this.processFlowDashboard = new ProcessFlowDashboard(this.elements.processFlowRoot);
     this.eventLogPanel = new SimulationLogPanel(this.elements.eventLogList, 'No events');
     this.warningPanel = new SimulationLogPanel(this.elements.warningList, 'No warnings');
     this.initializeSimulationTimes();
     this.bindEvents();
     this.bindTokenSimulationMode();
-    this.bindSelection();
-    this.bindCanvasSelectionFallback();
     this.bindSidebarResizers();
     this.updateAnimationSpeedLabel();
   }
@@ -198,6 +215,10 @@ export class ModelerApp {
       this.elements.fileInput.click();
     });
 
+    this.elements.importEventLog.addEventListener('click', () => {
+      this.elements.eventLogFileInput.click();
+    });
+
     this.elements.fileInput.addEventListener('change', async () => {
       const file = this.elements.fileInput.files?.[0];
 
@@ -211,6 +232,54 @@ export class ModelerApp {
         this.showApplicationError(`File "${file.name}" could not be read`, error);
       } finally {
         this.elements.fileInput.value = '';
+      }
+    });
+
+    this.elements.eventLogFileInput.addEventListener('change', async () => {
+      const file = this.elements.eventLogFileInput.files?.[0];
+
+      if (!file) {
+        return;
+      }
+
+      try {
+        const preparation = prepareEventLogImport(await file.text(), file.name);
+
+        if (preparation.kind === 'mapped') {
+          this.showEventLogMapper(preparation.preview);
+          this.setStatus(`Map fields for event log "${file.name}"`);
+          return;
+        }
+
+        await this.applyUploadedEventLog(preparation.dataset);
+      } catch (error) {
+        void this.showImportError(`Event log "${file.name}" could not be imported`, error);
+      } finally {
+        this.elements.eventLogFileInput.value = '';
+      }
+    });
+
+    this.elements.eventLogMapperCancel.addEventListener('click', () => {
+      this.hideEventLogMapper();
+      this.setStatus('Event log import cancelled');
+    });
+
+    this.elements.eventLogMapperImport.addEventListener('click', async () => {
+      if (!this.pendingEventLogImport) {
+        return;
+      }
+
+      try {
+        const dataset = eventLogDatasetFromImportPreview(
+          this.pendingEventLogImport,
+          this.readEventLogMapping(),
+          this.readEventLogImportOptions()
+        );
+
+        this.hideEventLogMapper();
+        await this.applyUploadedEventLog(dataset);
+      } catch (error) {
+        void this.showImportError('Mapped event log could not be imported', error);
       }
     });
 
@@ -240,8 +309,16 @@ export class ModelerApp {
       void this.switchView('modeler');
     });
 
-    this.elements.dashboardTab.addEventListener('click', () => {
-      void this.switchView('dashboard');
+    this.elements.performanceTab.addEventListener('click', () => {
+      void this.switchView('performance');
+    });
+
+    this.elements.statisticsTab.addEventListener('click', () => {
+      void this.switchView('statistics');
+    });
+
+    this.elements.processFlowTab.addEventListener('click', () => {
+      void this.switchView('processFlow');
     });
 
     this.elements.runSimulation.addEventListener('click', () => {
@@ -280,6 +357,11 @@ export class ModelerApp {
       this.clearSimulationState();
       this.updateCurrentSimulationTime();
       this.setStatus('Simulation reset');
+    });
+
+    this.elements.clearWarnings.addEventListener('click', () => {
+      this.warningPanel.render([]);
+      this.setStatus('Warnings cleared');
     });
 
     this.elements.animationSpeed.addEventListener('input', () => {
@@ -373,6 +455,71 @@ export class ModelerApp {
     });
   }
 
+  private async applyUploadedEventLog(dataset: EventLogDataset): Promise<void> {
+    this.uploadedEventLogDataset = dataset;
+    await this.switchView('processFlow');
+    this.setStatus(`Event log "${dataset.sourceName}" imported with ${dataset.records.length} records`);
+  }
+
+  private showEventLogMapper(preview: EventLogImportPreview): void {
+    this.pendingEventLogImport = preview;
+    this.elements.eventLogMapperTitle.textContent = `Map Event Log Fields: ${preview.sourceName}`;
+    this.elements.eventLogTimestampFormat.value = 'auto';
+    this.elements.eventLogInstantHandling.value = 'activity';
+    this.elements.eventLogMapperFields.replaceChildren(
+      ...EVENT_LOG_MAPPING_TARGETS.filter((target) => target !== 'ignore').map((target) => {
+        const row = document.createElement('label');
+        const selected = preview.suggestedMapping[target as keyof EventLogImportMapping] ?? '';
+
+        row.className = 'event-log-mapper-row';
+        row.innerHTML = `
+          <span>${eventLogMappingLabel(target)}</span>
+          <select data-target="${target}">
+            <option value="">Not mapped</option>
+            ${preview.fields.map((field) => `
+              <option value="${escapeHtml(field)}"${field === selected ? ' selected' : ''}>
+                ${escapeHtml(field)}
+              </option>
+            `).join('')}
+          </select>
+        `;
+        return row;
+      })
+    );
+    this.elements.eventLogMapperPreview.innerHTML = createEventLogMapperPreview(preview);
+    this.elements.eventLogMapperDialog.hidden = false;
+  }
+
+  private hideEventLogMapper(): void {
+    this.pendingEventLogImport = undefined;
+    this.elements.eventLogMapperDialog.hidden = true;
+    this.elements.eventLogMapperFields.replaceChildren();
+    this.elements.eventLogMapperPreview.replaceChildren();
+  }
+
+  private readEventLogMapping(): EventLogImportMapping {
+    const mapping: EventLogImportMapping = {};
+
+    for (const select of this.elements.eventLogMapperFields.querySelectorAll<HTMLSelectElement>('select[data-target]')) {
+      const target = select.dataset.target as Exclude<EventLogMappingTarget, 'ignore'>;
+
+      if (select.value) {
+        mapping[target] = select.value;
+      }
+    }
+
+    return mapping;
+  }
+
+  private readEventLogImportOptions(): EventLogImportOptions {
+    return {
+      timestampFormat: this.elements.eventLogTimestampFormat.value as EventLogTimestampFormat,
+      instantRecordHandling: this.elements.eventLogInstantHandling.value === 'activity'
+        ? 'activity'
+        : 'event'
+    };
+  }
+
   private exportResult(kind: 'json' | 'resultsCsv' | 'eventLogCsv'): void {
     if (!this.lastResult) {
       return;
@@ -402,7 +549,7 @@ export class ModelerApp {
   }
 
   private async importDiagram(xml: string, successMessage = 'Diagram loaded'): Promise<void> {
-    if (this.activeView === 'dashboard') {
+    if (this.activeView !== 'modeler') {
       await this.switchView('modeler');
     }
 
@@ -417,7 +564,6 @@ export class ModelerApp {
       const qbpImport = importQbpSimulationInfo(xml);
       const importResult = await this.modeler.importXML(qbpImport.xml);
       this.canvas.zoom('fit-viewport');
-      this.selectedTaskId = undefined;
 
       if (qbpImport.startDateTime) {
         const importedStart = new Date(qbpImport.startDateTime);
@@ -535,22 +681,17 @@ export class ModelerApp {
     this.heatmapOverlays.clear();
     this.lastResult = undefined;
     this.displayedResult = undefined;
-    this.selectedTaskId = undefined;
+    this.uploadedEventLogDataset = undefined;
     this.dashboard.clear();
+    this.processStatisticsDashboard.clear();
+    this.processFlowDashboard.clear();
     this.setExportButtons(false);
     this.renderEmptyResults();
   }
 
   private renderEmptyResults(): void {
     this.displayedResult = undefined;
-    this.elements.metricCompleted.textContent = '-';
-    this.elements.metricFailed.textContent = '-';
-    this.elements.metricAvgCycle.textContent = '-';
-    this.elements.metricP90Cycle.textContent = '-';
-    this.elements.bottleneckList.replaceChildren();
-    this.elements.pathList.replaceChildren();
-    this.elements.statsTable.replaceChildren();
-    this.elements.resourceStatsTable.replaceChildren();
+    this.processStatisticsDashboard.clear();
     this.eventLogPanel.render([]);
     this.warningPanel.render([]);
     this.elements.logList.replaceChildren();
@@ -622,43 +763,70 @@ export class ModelerApp {
 
   private renderResults(result: SimulationResult): void {
     this.displayedResult = result;
-    this.elements.metricCompleted.textContent = `${result.completedCases}`;
-    this.elements.metricFailed.textContent = `${result.failedCases}`;
-    this.elements.metricAvgCycle.textContent = formatDurationHours(result.cycleTimeAverage);
-    this.elements.metricP90Cycle.textContent = formatDurationHours(result.cycleTimeP90);
-
-    this.renderBottlenecks(result.elementMetrics);
-    this.renderPaths(result);
-    this.renderResourceStats(result.resourceMetrics);
-    this.renderStatsTable(result);
     this.updateCurrentSimulationTime(result);
     this.eventLogPanel.render(result.log);
     this.warningPanel.render(result.log.filter((entry) => entry.level !== 'info'));
 
-    if (this.activeView === 'dashboard' && !this.tokenAnimator.isPlaying()) {
-      void this.renderDashboard(result);
+    if (this.activeView === 'performance' && !this.tokenAnimator.isPlaying()) {
+      void this.renderPerformanceDashboard();
+    }
+
+    if (this.activeView === 'processFlow' && !this.tokenAnimator.isPlaying()) {
+      void this.renderProcessFlowDashboard();
+    }
+
+    if (this.activeView === 'statistics') {
+      this.processStatisticsDashboard.render(result, this.timeAccountingMode);
     }
   }
 
-  private async switchView(view: 'modeler' | 'dashboard'): Promise<void> {
+  private async switchView(view: 'modeler' | 'performance' | 'statistics' | 'processFlow'): Promise<void> {
     this.activeView = view;
-    const dashboardActive = view === 'dashboard';
+    const modelerActive = view === 'modeler';
+    const performanceActive = view === 'performance';
+    const statisticsActive = view === 'statistics';
+    const processFlowActive = view === 'processFlow';
 
-    this.elements.workspace.hidden = dashboardActive;
-    this.elements.dashboardView.hidden = !dashboardActive;
-    this.elements.modelerTab.classList.toggle('is-active', !dashboardActive);
-    this.elements.dashboardTab.classList.toggle('is-active', dashboardActive);
-    this.elements.modelerTab.setAttribute('aria-selected', String(!dashboardActive));
-    this.elements.dashboardTab.setAttribute('aria-selected', String(dashboardActive));
+    this.elements.workspace.hidden = !modelerActive;
+    this.elements.performanceView.hidden = !performanceActive;
+    this.elements.statisticsView.hidden = !statisticsActive;
+    this.elements.processFlowView.hidden = !processFlowActive;
+    this.elements.modelerTab.classList.toggle('is-active', modelerActive);
+    this.elements.performanceTab.classList.toggle('is-active', performanceActive);
+    this.elements.statisticsTab.classList.toggle('is-active', statisticsActive);
+    this.elements.processFlowTab.classList.toggle('is-active', processFlowActive);
+    this.elements.modelerTab.setAttribute('aria-selected', String(modelerActive));
+    this.elements.performanceTab.setAttribute('aria-selected', String(performanceActive));
+    this.elements.statisticsTab.setAttribute('aria-selected', String(statisticsActive));
+    this.elements.processFlowTab.setAttribute('aria-selected', String(processFlowActive));
 
-    if (dashboardActive) {
+    if (performanceActive) {
+      await this.renderPerformanceDashboard();
+
+      requestAnimationFrame(() => this.dashboard.resize());
+      return;
+    }
+
+    if (processFlowActive) {
+      await this.renderProcessFlowDashboard();
+      requestAnimationFrame(() => this.processFlowDashboard.resize());
+      return;
+    }
+
+    if (statisticsActive) {
+      if (this.uploadedEventLogDataset) {
+        this.processStatisticsDashboard.renderEventLog(this.uploadedEventLogDataset);
+        return;
+      }
+
       const result = this.displayedResult ?? this.lastResult;
 
       if (result) {
-        await this.renderDashboard(result);
+        this.processStatisticsDashboard.render(result, this.timeAccountingMode);
+      } else {
+        this.processStatisticsDashboard.clear();
       }
 
-      requestAnimationFrame(() => this.dashboard.resize());
       return;
     }
 
@@ -673,166 +841,47 @@ export class ModelerApp {
     }
   }
 
-  private renderBottlenecks(metrics: ElementMetrics[]): void {
-    const top = metrics
-      .filter((metric) => metric.visits > 0 && isActivityMetricType(metric.type))
-      .map((metric) => ({
-        ...metric,
-        avgWait: metric.visits
-          ? totalWaitTime(metric, this.timeAccountingMode) / metric.visits
-          : 0,
-        avgService: metric.completions
-          ? totalServiceTime(metric, this.timeAccountingMode) / metric.completions
-          : 0
-      }))
-      .sort((a, b) => b.avgWait + b.avgService - (a.avgWait + a.avgService))
-      .slice(0, 6);
-
-    this.elements.bottleneckList.replaceChildren(
-      ...top.map((metric) => {
-        const item = document.createElement('li');
-        item.innerHTML = `
-          <span>${escapeHtml(metric.name)}</span>
-          <strong>${formatDurationMinutes(metric.avgWait + metric.avgService)}</strong>
-          <small>Wait+Service avg: W ${formatDurationMinutes(metric.avgWait)}, S ${formatDurationMinutes(metric.avgService)} · ${metric.visits} visits, ${metric.errors} errors</small>
-        `;
-        return item;
-      })
-    );
-  }
-
-  private renderPaths(result: SimulationResult): void {
-    const top = result.flowMetrics.slice(0, 6);
-
-    this.elements.pathList.replaceChildren(
-      ...top.map((metric) => {
-        const item = document.createElement('li');
-        item.innerHTML = `
-          <span>${escapeHtml(metric.name)}</span>
-          <strong>${metric.count}</strong>
-          <small>sequence flow</small>
-        `;
-        return item;
-      })
-    );
-  }
-
-  private renderResourceStats(metrics: ResourceMetrics[]): void {
-    this.elements.resourceStatsTable.replaceChildren(
-      ...metrics.map((metric) => {
-        const card = document.createElement('article');
-        const service = describeSamples(
-          serviceTimeSamples(metric, this.timeAccountingMode),
-          formatDurationMinutes
-        );
-        const wait = describeSamples(
-          waitTimeSamples(metric, this.timeAccountingMode),
-          formatDurationMinutes
-        );
-
-        card.className = 'sidebar-stat-card';
-        card.innerHTML = `
-          <header>
-            <strong>${escapeHtml(metric.name || metric.resourceId)}</strong>
-            <span>${formatPercent(metric.utilization ?? 0)} utilization</span>
-          </header>
-          ${createStatFactsHtml([
-            ['Tasks', metric.taskCount],
-            ['Errors', metric.errors]
-          ])}
-          ${createTimeStatisticsTable(service, wait)}
-        `;
-
-        return card;
-      })
-    );
-  }
-
-  private renderStatsTable(result: SimulationResult): void {
-    const selectedTaskMetric = this.selectedTaskId
-      ? result.elementMetrics.find((metric) => metric.elementId === this.selectedTaskId)
-      : undefined;
-    const processSeries = buildDashboardSeries(result, this.timeAccountingMode)
-      .filter((series) => series.scope === 'process');
-    const taskName = selectedTaskMetric?.name ??
-      this.getElementLabel(this.selectedTaskId) ??
-      this.selectedTaskId ??
-      'Task';
-    const serviceSamples = selectedTaskMetric
-      ? serviceTimeSamples(selectedTaskMetric, this.timeAccountingMode)
-      : processSeries.flatMap((series) => series.serviceSamples);
-    const waitingSamples = selectedTaskMetric
-      ? waitTimeSamples(selectedTaskMetric, this.timeAccountingMode)
-      : processSeries.flatMap((series) => series.waitSamples);
-    const service = describeSamples(serviceSamples, formatDurationMinutes);
-    const wait = describeSamples(waitingSamples, formatDurationMinutes);
-    const outputVariables = this.selectedTaskId
-      ? collectOutputVariables(result, this.selectedTaskId)
-      : [];
-    const facts: Array<[string, string | number]> = selectedTaskMetric
-      ? [
-          ['Scope', `Task: ${taskName}`],
-          ['Executions', selectedTaskMetric.visits],
-          ['Errors', selectedTaskMetric.errors],
-          ['Outputs', outputVariables.length ? outputVariables.join(', ') : '-']
-        ]
-      : [
-          ['Scope', 'All processes'],
-          ['Instances', result.cases.length],
-          ['Completed', result.completedCases],
-          ['Failed', result.failedCases],
-          ['Avg cycle', formatDurationHours(result.cycleTimeAverage)],
-          ['P90 cycle', formatDurationHours(result.cycleTimeP90)]
-        ];
-
-    this.elements.statsTable.innerHTML = `
-      ${createStatFactsHtml(facts)}
-      ${createTimeStatisticsTable(service, wait)}
-    `;
-  }
-
-  private bindSelection(): void {
-    const eventBus = this.modeler.get<EventBus>('eventBus');
-
-    eventBus.on('selection.changed', (event) => {
-      const selected = event.newSelection?.[0];
-
-      this.selectedTaskId = selected && isTaskElement(selected) ? selected.id : undefined;
-      this.renderCurrentStatsTable();
-    });
-  }
-
-  private bindCanvasSelectionFallback(): void {
-    const container = this.canvas.getContainer();
-    const elementRegistry = this.modeler.get<ElementRegistry>('elementRegistry');
-
-    container.addEventListener('click', (event) => {
-      const target = event.target as Element | null;
-      const diagramElement = target?.closest<HTMLElement>('.djs-element[data-element-id]');
-
-      if (!diagramElement) {
-        if (target?.closest('#canvas')) {
-          this.selectedTaskId = undefined;
-          this.renderCurrentStatsTable();
-        }
-
+  private async renderPerformanceDashboard(): Promise<void> {
+    try {
+      if (this.uploadedEventLogDataset) {
+        await this.dashboard.renderEventLog(this.uploadedEventLogDataset);
         return;
       }
 
-      const element = elementRegistry.get(diagramElement.dataset.elementId ?? '');
-      this.selectedTaskId = element && isTaskElement(element) ? element.id : undefined;
-      this.renderCurrentStatsTable();
-    });
+      const result = this.displayedResult ?? this.lastResult;
+
+      if (!result) {
+        this.dashboard.clear();
+        return;
+      }
+
+      await this.dashboard.render(result);
+    } catch (error) {
+      this.showApplicationError('Performance dashboard rendering failed', error);
+    }
   }
 
-  private renderCurrentStatsTable(): void {
+  private async renderProcessFlowDashboard(dataset = this.currentProcessFlowDataset()): Promise<void> {
+    try {
+      if (!dataset) {
+        this.processFlowDashboard.clear();
+        return;
+      }
+
+      await this.processFlowDashboard.render(dataset);
+    } catch (error) {
+      this.showApplicationError('Process Flow dashboard rendering failed', error);
+    }
+  }
+
+  private currentProcessFlowDataset(): EventLogDataset | undefined {
+    if (this.uploadedEventLogDataset) {
+      return this.uploadedEventLogDataset;
+    }
+
     const result = this.displayedResult ?? this.lastResult;
 
-    if (result) {
-      this.renderStatsTable(result);
-    } else {
-      this.elements.statsTable.replaceChildren();
-    }
+    return result ? eventLogDatasetFromSimulationResult(result) : undefined;
   }
 
   private bindSidebarResizers(): void {
@@ -954,22 +1003,13 @@ export class ModelerApp {
     );
   }
 
-  private getElementLabel(elementId: string | undefined): string | undefined {
-    if (!elementId) {
-      return undefined;
-    }
-
-    const element = this.modeler.get<ElementRegistry>('elementRegistry').get(elementId);
-
-    return element?.businessObject?.name || element?.businessObject?.id || element?.id;
-  }
-
   private collectElements(): AppElements {
     return {
       newDiagram: getElement('new-diagram'),
       demoModel: getElement('demo-model'),
       emptyDiagram: getElement('empty-diagram'),
       importDiagram: getElement('import-diagram'),
+      importEventLog: getElement('import-event-log'),
       exportDiagram: getElement('export-diagram'),
       runSimulation: getElement('run-simulation'),
       pauseSimulation: getElement('pause-simulation'),
@@ -982,13 +1022,28 @@ export class ModelerApp {
       exportResultsCsv: getElement('export-results-csv'),
       exportEventLogCsv: getElement('export-event-log-csv'),
       modelerTab: getElement('modeler-tab'),
-      dashboardTab: getElement('dashboard-tab'),
+      performanceTab: getElement('performance-tab'),
+      statisticsTab: getElement('statistics-tab'),
+      processFlowTab: getElement('process-flow-tab'),
       workspace: getElement('workspace'),
-      dashboardView: getElement('dashboard-view'),
-      dashboardRoot: getElement('dashboard-root'),
+      performanceView: getElement('performance-view'),
+      performanceRoot: getElement('performance-root'),
+      statisticsView: getElement('statistics-view'),
+      statisticsRoot: getElement('statistics-root'),
+      processFlowView: getElement('process-flow-view'),
+      processFlowRoot: getElement('process-flow-root'),
       leftResizer: getElement('left-sidebar-resizer'),
       rightResizer: getElement('right-sidebar-resizer'),
       fileInput: getElement('file-input'),
+      eventLogFileInput: getElement('event-log-file-input'),
+      eventLogMapperDialog: getElement('event-log-mapper-dialog'),
+      eventLogMapperTitle: getElement('event-log-mapper-title'),
+      eventLogMapperFields: getElement('event-log-mapper-fields'),
+      eventLogTimestampFormat: getElement('event-log-timestamp-format'),
+      eventLogInstantHandling: getElement('event-log-instant-handling'),
+      eventLogMapperPreview: getElement('event-log-mapper-preview'),
+      eventLogMapperCancel: getElement('event-log-mapper-cancel'),
+      eventLogMapperImport: getElement('event-log-mapper-import'),
       seed: getElement('seed'),
       simulationStartTime: getElement('simulation-start-time'),
       simulationEndTime: getElement('simulation-end-time'),
@@ -1004,17 +1059,10 @@ export class ModelerApp {
         ...this.root.querySelectorAll<HTMLButtonElement>('[data-time-accounting]')
       ],
       statusLine: getElement('status-line'),
-      metricCompleted: getElement('metric-completed'),
-      metricFailed: getElement('metric-failed'),
-      metricAvgCycle: getElement('metric-avg-cycle'),
-      metricP90Cycle: getElement('metric-p90-cycle'),
       resourceList: getElement('resource-list'),
-      bottleneckList: getElement('bottleneck-list'),
-      pathList: getElement('path-list'),
-      statsTable: getElement('stats-table'),
-      resourceStatsTable: getElement('resource-stats-table'),
       eventLogList: getElement('event-log-list'),
       warningList: getElement('warning-list'),
+      clearWarnings: getElement('clear-warnings'),
       logList: getElement('log-list')
     };
   }
@@ -1040,6 +1088,19 @@ export class ModelerApp {
         message: `${context}: ${detail.message}`
       }
     ]);
+  }
+
+  private async showImportError(context: string, error: unknown): Promise<void> {
+    const detail = formatErrorDetail(error);
+
+    console.error(context, error);
+    this.setStatus(`${context}: ${detail.summary}`);
+
+    if (this.activeView !== 'processFlow') {
+      await this.switchView('processFlow');
+    }
+
+    this.processFlowDashboard.setImportWarnings([`${context}: ${detail.message}`]);
   }
 
   private dispatchResourceCatalogChanged(): void {
@@ -1104,6 +1165,18 @@ const ANIMATION_SPEEDS = [1, 2, 4, 8, 16, 64, 256, 1024] as const;
 const LIVE_RESULT_RENDER_INTERVAL_MS = 450;
 const LIVE_OVERLAY_RENDER_INTERVAL_MS = 700;
 const LIVE_STATUS_RENDER_INTERVAL_MS = 250;
+const EVENT_LOG_MAPPING_TARGETS: EventLogMappingTarget[] = [
+  'caseId',
+  'activityId',
+  'activityName',
+  'startTime',
+  'endTime',
+  'lifecycleTransition',
+  'resource',
+  'processId',
+  'variables',
+  'ignore'
+];
 
 function createShellMarkup(): string {
   return `
@@ -1124,6 +1197,9 @@ function createShellMarkup(): string {
           </button>
           <button id="import-diagram" class="icon-button" title="Import BPMN" aria-label="Import BPMN">
             <i data-lucide="upload"></i>
+          </button>
+          <button id="import-event-log" class="text-button toolbar-text-button" title="Import Event Log">
+            Import Event Log
           </button>
           <button id="export-diagram" class="icon-button" title="Export BPMN" aria-label="Export BPMN">
             <i data-lucide="download"></i>
@@ -1206,9 +1282,17 @@ function createShellMarkup(): string {
           <i data-lucide="workflow"></i>
           <span>Modeler</span>
         </button>
-        <button id="dashboard-tab" class="view-tab" role="tab" aria-selected="false" aria-controls="dashboard-view">
+        <button id="statistics-tab" class="view-tab" role="tab" aria-selected="false" aria-controls="statistics-view">
           <i data-lucide="chart-no-axes-combined"></i>
-          <span>Dashboard</span>
+          <span>Process Statistics</span>
+        </button>
+        <button id="performance-tab" class="view-tab" role="tab" aria-selected="false" aria-controls="performance-view">
+          <i data-lucide="chart-no-axes-combined"></i>
+          <span>Performance</span>
+        </button>
+        <button id="process-flow-tab" class="view-tab" role="tab" aria-selected="false" aria-controls="process-flow-view">
+          <i data-lucide="workflow"></i>
+          <span>Process Flow</span>
         </button>
       </nav>
       <section id="workspace" class="workspace view-panel" role="tabpanel" aria-labelledby="modeler-tab">
@@ -1217,31 +1301,6 @@ function createShellMarkup(): string {
             <h1>BPMN DES</h1>
             <p id="status-line">Ready</p>
           </div>
-          <section class="panel-section collapsible-section">
-            <details open>
-              <summary class="section-title">
-                <h2>Overview</h2>
-              </summary>
-              <div class="metric-grid">
-                <article>
-                  <span>Completed</span>
-                  <strong id="metric-completed">-</strong>
-                </article>
-                <article>
-                  <span>Failed</span>
-                  <strong id="metric-failed">-</strong>
-                </article>
-                <article>
-                  <span>Avg CT</span>
-                  <strong id="metric-avg-cycle">-</strong>
-                </article>
-                <article>
-                  <span>P90 CT</span>
-                  <strong id="metric-p90-cycle">-</strong>
-                </article>
-              </div>
-            </details>
-          </section>
           <section class="panel-section collapsible-section">
             <details open>
               <summary class="section-title">
@@ -1258,38 +1317,6 @@ function createShellMarkup(): string {
           <section class="panel-section collapsible-section">
             <details open>
               <summary class="section-title">
-                <h2>Bottlenecks</h2>
-              </summary>
-              <ol id="bottleneck-list" class="rank-list"></ol>
-            </details>
-          </section>
-          <section class="panel-section collapsible-section">
-            <details open>
-              <summary class="section-title">
-                <h2>Paths</h2>
-              </summary>
-              <ol id="path-list" class="rank-list"></ol>
-            </details>
-          </section>
-          <section class="panel-section collapsible-section">
-            <details open>
-              <summary class="section-title">
-                <h2>Statistics</h2>
-              </summary>
-              <div id="stats-table" class="sidebar-stat-list"></div>
-            </details>
-          </section>
-          <section class="panel-section collapsible-section">
-            <details open>
-              <summary class="section-title">
-                <h2>Resource Utilization</h2>
-              </summary>
-              <div id="resource-stats-table" class="sidebar-stat-list resource-stats-table"></div>
-            </details>
-          </section>
-          <section class="panel-section collapsible-section">
-            <details open>
-              <summary class="section-title">
                 <h2>Event Log</h2>
               </summary>
               <ul id="event-log-list" class="warning-list event-log-list"></ul>
@@ -1300,6 +1327,9 @@ function createShellMarkup(): string {
               <summary class="section-title">
                 <h2>Warnings</h2>
               </summary>
+              <div class="section-actions">
+                <button id="clear-warnings" class="text-button compact-text-button" type="button">Clear</button>
+              </div>
               <ul id="warning-list" class="warning-list"></ul>
             </details>
           </section>
@@ -1324,10 +1354,58 @@ function createShellMarkup(): string {
         <div id="right-sidebar-resizer" class="sidebar-resizer right-sidebar-resizer" role="separator" aria-label="Resize right sidebar"></div>
         <aside id="properties" class="properties-panel"></aside>
       </section>
-      <section id="dashboard-view" class="dashboard-view view-panel" role="tabpanel" aria-labelledby="dashboard-tab" hidden>
-        <div id="dashboard-root" class="dashboard-root"></div>
+      <section id="performance-view" class="dashboard-view view-panel" role="tabpanel" aria-labelledby="performance-tab" hidden>
+        <div id="performance-root" class="dashboard-root"></div>
+      </section>
+      <section id="statistics-view" class="dashboard-view view-panel" role="tabpanel" aria-labelledby="statistics-tab" hidden>
+        <div id="statistics-root" class="dashboard-root process-statistics-root"></div>
+      </section>
+      <section id="process-flow-view" class="dashboard-view view-panel" role="tabpanel" aria-labelledby="process-flow-tab" hidden>
+        <div id="process-flow-root" class="dashboard-root process-flow-root"></div>
+      </section>
+      <section id="event-log-mapper-dialog" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="event-log-mapper-title" hidden>
+        <div class="event-log-mapper">
+          <header>
+            <h2 id="event-log-mapper-title">Map Event Log Fields</h2>
+            <p>Select which source field should be used for each internal event-log attribute.</p>
+          </header>
+          <div class="event-log-mapper-options">
+            <label>
+              <span>Timestamp Format</span>
+              <select id="event-log-timestamp-format">
+                <option value="auto">Auto detect</option>
+                <option value="iso">ISO 8601</option>
+                <option value="yyyy-MM-dd HH:mm:ss">yyyy-MM-dd HH:mm:ss</option>
+                <option value="yyyy-MM-dd HH:mm:ss.SSSSSSXXX">yyyy-MM-dd HH:mm:ss.SSSSSS+02:00</option>
+                <option value="yyyyMMddTHHmm">yyyyMMddTHHmm</option>
+                <option value="dd.MM.yyyy HH:mm:ss">dd.MM.yyyy HH:mm:ss</option>
+                <option value="dd/MM/yyyy HH:mm:ss">dd/MM/yyyy HH:mm:ss</option>
+                <option value="MM/dd/yyyy HH:mm:ss">MM/dd/yyyy HH:mm:ss</option>
+                <option value="epochMillis">Epoch milliseconds</option>
+                <option value="epochSeconds">Epoch seconds</option>
+              </select>
+            </label>
+            <label>
+              <span>Zero/Missing End Time</span>
+              <select id="event-log-instant-handling">
+                <option value="activity">Treat as Activity</option>
+                <option value="event">Treat as Event</option>
+              </select>
+            </label>
+          </div>
+          <div id="event-log-mapper-fields" class="event-log-mapper-fields"></div>
+          <section>
+            <h3>Preview</h3>
+            <div id="event-log-mapper-preview" class="event-log-mapper-preview"></div>
+          </section>
+          <footer>
+            <button id="event-log-mapper-cancel" type="button" class="text-button">Cancel</button>
+            <button id="event-log-mapper-import" type="button" class="primary-button">Import Event Log</button>
+          </footer>
+        </div>
       </section>
       <input id="file-input" class="hidden-input" type="file" accept=".bpmn,.xml" />
+      <input id="event-log-file-input" class="hidden-input" type="file" accept=".csv,.json,.txt,.xes,.mxml,.xml" />
     </main>
   `;
 }
@@ -1351,6 +1429,59 @@ function createAppIcons(): void {
       Workflow
     }
   });
+}
+
+function eventLogMappingLabel(target: EventLogMappingTarget): string {
+  const labels: Record<EventLogMappingTarget, string> = {
+    ignore: 'Ignore',
+    caseId: 'Case ID',
+    activityId: 'Activity ID',
+    activityName: 'Activity Name',
+    startTime: 'Start Time',
+    endTime: 'End Time',
+    lifecycleTransition: 'Lifecycle Transition',
+    resource: 'Resource',
+    processId: 'Process ID',
+    variables: 'Variables JSON'
+  };
+
+  return labels[target];
+}
+
+function createEventLogMapperPreview(preview: EventLogImportPreview): string {
+  const fields = preview.fields.slice(0, 8);
+  const rows = preview.rows.slice(0, 5);
+
+  if (!fields.length || !rows.length) {
+    return '<p class="dashboard-empty compact-empty">No preview rows available.</p>';
+  }
+
+  return `
+    <table>
+      <thead>
+        <tr>${fields.map((field) => `<th>${escapeHtml(field)}</th>`).join('')}</tr>
+      </thead>
+      <tbody>
+        ${rows.map((row) => `
+          <tr>
+            ${fields.map((field) => `<td>${escapeHtml(formatPreviewValue(row[field]))}</td>`).join('')}
+          </tr>
+        `).join('')}
+      </tbody>
+    </table>
+  `;
+}
+
+function formatPreviewValue(value: unknown): string {
+  if (value === undefined || value === null) {
+    return '';
+  }
+
+  if (typeof value === 'object') {
+    return JSON.stringify(value);
+  }
+
+  return String(value);
 }
 
 function getElement<T extends HTMLElement>(id: string): T {
@@ -1389,14 +1520,6 @@ function formatNumber(value: number): string {
   }
 
   return value.toFixed(2);
-}
-
-function formatPercent(value: number): string {
-  if (!Number.isFinite(value)) {
-    return '-';
-  }
-
-  return `${formatNumber(value * 100)}%`;
 }
 
 function formatDurationHours(hours: number): string {
@@ -1572,111 +1695,6 @@ function rootCaseCount(result: SimulationResult): number {
   return result.cases.filter((caseTrace) => caseTrace.trigger !== 'subProcess').length;
 }
 
-function collectOutputVariables(result: SimulationResult, elementId: string): string[] {
-  const variables = new Set<string>();
-
-  for (const caseTrace of result.cases) {
-    const output = caseTrace.outputs[elementId];
-
-    if (!output) {
-      continue;
-    }
-
-    if (typeof output === 'object' && !Array.isArray(output)) {
-      for (const key of Object.keys(output)) {
-        variables.add(key);
-      }
-    } else {
-      variables.add('value');
-    }
-  }
-
-  return [...variables].sort();
-}
-
-function describeSamples(
-  samples: number[],
-  formatter: (value: number) => string = formatNumber
-): Record<'min' | 'max' | 'median' | 'avg', string> {
-  if (!samples.length) {
-    return {
-      min: '-',
-      max: '-',
-      median: '-',
-      avg: '-'
-    };
-  }
-
-  const sorted = [...samples].sort((a, b) => a - b);
-
-  return {
-    min: formatter(sorted[0]),
-    max: formatter(sorted[sorted.length - 1]),
-    median: formatter(median(sorted)),
-    avg: formatter(sorted.reduce((sum, value) => sum + value, 0) / sorted.length)
-  };
-}
-
-function createStatFactsHtml(facts: Array<[string, string | number]>): string {
-  return `
-    <dl class="stat-facts">
-      ${facts.map(([label, value]) => `
-        <div>
-          <dt>${escapeHtml(label)}</dt>
-          <dd>${escapeHtml(String(value))}</dd>
-        </div>
-      `).join('')}
-    </dl>
-  `;
-}
-
-function createTimeStatisticsTable(
-  service: Record<'min' | 'max' | 'median' | 'avg', string>,
-  wait: Record<'min' | 'max' | 'median' | 'avg', string>
-): string {
-  const rows: Array<[string, keyof typeof service]> = [
-    ['Min', 'min'],
-    ['Max', 'max'],
-    ['Average', 'avg'],
-    ['Median', 'median']
-  ];
-
-  return `
-    <table class="time-stat-table">
-      <thead>
-        <tr>
-          <th>Statistic</th>
-          <th>Service</th>
-          <th>Waiting</th>
-        </tr>
-      </thead>
-      <tbody>
-        ${rows.map(([label, key]) => `
-          <tr>
-            <th>${label}</th>
-            <td>${service[key]}</td>
-            <td>${wait[key]}</td>
-          </tr>
-        `).join('')}
-      </tbody>
-    </table>
-  `;
-}
-
-function median(sortedValues: number[]): number {
-  if (!sortedValues.length) {
-    return 0;
-  }
-
-  const middle = Math.floor(sortedValues.length / 2);
-
-  if (sortedValues.length % 2) {
-    return sortedValues[middle];
-  }
-
-  return (sortedValues[middle - 1] + sortedValues[middle]) / 2;
-}
-
 function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
 }
@@ -1731,16 +1749,6 @@ function simulationOffsetHours(date: Date): number {
   const weekdayIndex = (date.getDay() + 6) % 7;
 
   return weekdayIndex * 24 + date.getHours() + date.getMinutes() / 60 + date.getSeconds() / 3600;
-}
-
-function isTaskElement(element: BpmnElement): boolean {
-  const type = element.businessObject?.$type ?? '';
-
-  return isActivityMetricType(type);
-}
-
-function isActivityMetricType(type: string): boolean {
-  return /Task$/.test(type) || ['bpmn:SubProcess', 'bpmn:CallActivity', 'bpmn:Transaction'].includes(type);
 }
 
 function createResourceRow(resource: SimulationResource, index: number): HTMLElement {

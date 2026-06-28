@@ -44,7 +44,9 @@ test('ExtensionElementWriter persists nested task simulation config', () => {
   };
 
   updateDurationConfig(element, { type: 'normal', mean: 10, stddev: 2 }, bpmnFactory, modeling);
+  updateDurationConfig(element, { type: 'fixed', mean: 3 }, bpmnFactory, modeling, 'delay');
   updateSimulationValue(element, 'task', ['resource', 'resourceId'], 'clerk', bpmnFactory, modeling);
+  updateSimulationValue(element, 'task', ['resource', 'sameInstanceAsBefore'], true, bpmnFactory, modeling);
   updateSimulationValue(element, 'task', ['error', 'probability'], '0.25', bpmnFactory, modeling);
   updateSimulationValue(element, 'task', ['error', 'possibleErrors'], 'pickerror:1', bpmnFactory, modeling);
   updateOutputObjectFields(
@@ -74,10 +76,13 @@ test('ExtensionElementWriter persists nested task simulation config', () => {
 
   const config = readTaskConfig(businessObject);
 
+  assert.equal(config.delay?.type, 'fixed');
+  assert.equal(config.delay?.mean, 3);
   assert.equal(config.duration?.type, 'normal');
   assert.equal(config.duration?.mean, 10);
   assert.equal(config.duration?.stddev, 2);
   assert.equal(config.resource?.resourceId, 'clerk');
+  assert.equal(config.resource?.sameInstanceAsBefore, true);
   assert.equal(config.error?.probability, 0.25);
   assert.deepEqual(config.error?.possibleErrors, [{ errorCode: 'pickerror', probability: 1 }]);
   assert.deepEqual(config.outputObject?.fields, [

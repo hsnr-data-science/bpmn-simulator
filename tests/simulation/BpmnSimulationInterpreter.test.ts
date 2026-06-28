@@ -55,6 +55,54 @@ test('XOR gateway selects the first JavaScript condition that evaluates true', (
   assert.ok(logs.some((entry) => entry.message.includes('JavaScript-Ausdruecke')));
 });
 
+test('XOR gateway conditions accept leading equals expressions', () => {
+  const model = createXorModel({
+    flows: [
+      flow('flow_equal_condition', 1, true, '=status === "ok"')
+    ]
+  });
+  const interpreter = new BpmnSimulationInterpreter(model);
+
+  const selected = interpreter.getOutgoingFlowIds(
+    model.nodes.get('xor') as SimNode,
+    new SeededRandom(3),
+    () => undefined,
+    {
+      outputs: {
+        Task_Check_Order: {
+          status: 'ok'
+        }
+      }
+    }
+  );
+
+  assert.deepEqual(selected, ['flow_equal_condition']);
+});
+
+test('XOR gateway conditions accept leading equals inside expression wrappers', () => {
+  const model = createXorModel({
+    flows: [
+      flow('flow_wrapped_equal_condition', 1, true, '${=status === "ok"}')
+    ]
+  });
+  const interpreter = new BpmnSimulationInterpreter(model);
+
+  const selected = interpreter.getOutgoingFlowIds(
+    model.nodes.get('xor') as SimNode,
+    new SeededRandom(3),
+    () => undefined,
+    {
+      outputs: {
+        Task_Check_Order: {
+          status: 'ok'
+        }
+      }
+    }
+  );
+
+  assert.deepEqual(selected, ['flow_wrapped_equal_condition']);
+});
+
 test('XOR gateway conditions can access scoped output objects', () => {
   const model = createXorModel({
     flows: [

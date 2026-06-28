@@ -20,6 +20,8 @@ export type BpmnBusinessObject = {
   messageRef?: BpmnBusinessObject | string;
   signalRef?: BpmnBusinessObject | string;
   errorRef?: BpmnBusinessObject | string;
+  escalationRef?: BpmnBusinessObject | string;
+  escalationCode?: string;
   extensionElements?: BpmnBusinessObject & {
     values?: BpmnBusinessObject[];
   };
@@ -68,7 +70,7 @@ export type FlowNodeKind =
   | 'multiInstanceActivity'
   | 'unsupported';
 
-export type SimEventDefinitionType = 'message' | 'signal' | 'timer' | 'error' | 'terminate' | 'unknown';
+export type SimEventDefinitionType = 'message' | 'signal' | 'timer' | 'error' | 'escalation' | 'terminate' | 'unknown';
 
 export type SimEventDirection = 'catch' | 'throw' | 'none';
 
@@ -142,4 +144,5 @@ export type SimModel = {
   messages?: Map<string, string>;
   signals?: Map<string, string>;
   errors?: Map<string, string>;
+  escalations?: Map<string, string>;
 };

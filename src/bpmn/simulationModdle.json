@@ -18,6 +18,7 @@
       "superClass": ["Element"],
       "properties": [
         { "name": "enabled", "type": "Boolean", "isAttr": true },
+        { "name": "delay", "type": "Duration" },
         { "name": "duration", "type": "Duration" },
         { "name": "resource", "type": "Resource" },
         { "name": "failure", "type": "Failure" },
@@ -46,6 +47,7 @@
         { "name": "id", "type": "String", "isAttr": true },
         { "name": "name", "type": "String", "isAttr": true },
         { "name": "capacity", "type": "String", "isAttr": true },
+        { "name": "sameInstanceAsBefore", "type": "Boolean", "isAttr": true },
         { "name": "weekdays", "type": "String", "isAttr": true },
         { "name": "hourRanges", "type": "String", "isAttr": true }
       ]

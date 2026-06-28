@@ -6,11 +6,13 @@ export type QueuedTask = {
   token: Token;
   node: SimNode;
   arrivedAt: number;
+  preferredResourceInstanceId?: string;
 };
 
 export type ResourceStart = {
   started: boolean;
   resourceId?: string;
+  resourceInstanceId?: string;
   delayedUntil?: number;
 };
 
@@ -19,13 +21,21 @@ type ResourceState = {
   capacity: number;
   schedule?: ResourceConfig;
   busy: number;
+  instances: string[];
+  busyInstances: Set<string>;
   queue: QueuedTask[];
 };
 
 export class ResourceManager {
   private resources = new Map<string, ResourceState>();
 
-  request(node: SimNode, token: Token, time: number): ResourceStart {
+  request(
+    node: SimNode,
+    token: Token,
+    time: number,
+    preferredResourceInstanceId?: string,
+    arrivedAt = time
+  ): ResourceStart {
     const resource = this.getResource(node);
 
     if (!resource) {
@@ -42,19 +52,22 @@ export class ResourceManager {
       };
     }
 
-    if (resource.busy < resource.capacity) {
+    if (resource.busy < resource.capacity && isPreferredInstanceAvailable(resource, preferredResourceInstanceId)) {
       resource.busy += 1;
+      const resourceInstanceId = allocateResourceInstance(resource, preferredResourceInstanceId);
 
       return {
         started: true,
-        resourceId: resource.id
+        resourceId: resource.id,
+        resourceInstanceId
       };
     }
 
     resource.queue.push({
       token,
       node,
-      arrivedAt: time
+      arrivedAt,
+      preferredResourceInstanceId
     });
 
     return {
@@ -63,7 +76,7 @@ export class ResourceManager {
     };
   }
 
-  release(resourceId: string | undefined): QueuedTask[] {
+  release(resourceId: string | undefined, resourceInstanceId?: string): QueuedTask[] {
     if (!resourceId) {
       return [];
     }
@@ -76,12 +89,30 @@ export class ResourceManager {
 
     resource.busy = Math.max(0, resource.busy - 1);
 
+    if (resourceInstanceId) {
+      resource.busyInstances.delete(resourceInstanceId);
+    } else {
+      const firstBusy = resource.busyInstances.values().next().value as string | undefined;
+
+      if (firstBusy) {
+        resource.busyInstances.delete(firstBusy);
+      }
+    }
+
     const released: QueuedTask[] = [];
 
     const freeSlots = Math.max(0, resource.capacity - resource.busy);
 
     while (resource.queue.length && released.length < freeSlots) {
-      const next = resource.queue.shift();
+      const nextIndex = resource.queue.findIndex((candidate) => {
+        return isPreferredInstanceAvailable(resource, candidate.preferredResourceInstanceId);
+      });
+
+      if (nextIndex < 0) {
+        break;
+      }
+
+      const next = resource.queue.splice(nextIndex, 1)[0];
 
       if (!next) {
         break;
@@ -112,6 +143,8 @@ export class ResourceManager {
       capacity,
       schedule: node.params.resource,
       busy: 0,
+      instances: createResourceInstances(resourceId, node.params.resource?.resourceName, capacity),
+      busyInstances: new Set<string>(),
       queue: []
     };
 
@@ -119,4 +152,46 @@ export class ResourceManager {
 
     return resource;
   }
+}
+
+function isPreferredInstanceAvailable(
+  resource: ResourceState,
+  preferredResourceInstanceId: string | undefined
+): boolean {
+  return !preferredResourceInstanceId || (
+    resource.instances.includes(preferredResourceInstanceId) &&
+    !resource.busyInstances.has(preferredResourceInstanceId)
+  );
+}
+
+function allocateResourceInstance(
+  resource: ResourceState,
+  preferredResourceInstanceId?: string
+): string | undefined {
+  const instance = preferredResourceInstanceId && isPreferredInstanceAvailable(resource, preferredResourceInstanceId)
+    ? preferredResourceInstanceId
+    : resource.instances.find((candidate) => !resource.busyInstances.has(candidate));
+
+  if (!instance) {
+    return undefined;
+  }
+
+  resource.busyInstances.add(instance);
+
+  return instance;
+}
+
+function createResourceInstances(
+  resourceId: string,
+  resourceName: string | undefined,
+  capacity: number
+): string[] {
+  const count = Math.max(1, Math.floor(capacity));
+  const label = (resourceName || resourceId).trim() || resourceId;
+
+  if (count === 1) {
+    return [label];
+  }
+
+  return Array.from({ length: count }, (_, index) => `${label} #${index + 1}`);
 }

@@ -135,6 +135,7 @@ export class StatisticsCollector {
       time?: number;
       level?: SimulationLogEntry['level'];
       resourceId?: string;
+      resourceInstanceId?: string;
       waitTime?: number;
       waitTimeExcludingOffTimetable?: number;
       serviceTime?: number;
@@ -154,6 +155,7 @@ export class StatisticsCollector {
       elementId: options.elementId,
       elementName: options.elementName,
       resourceId: options.resourceId,
+      resourceInstanceId: options.resourceInstanceId,
       waitTime: options.waitTime,
       waitTimeExcludingOffTimetable: options.waitTimeExcludingOffTimetable,
       serviceTime: options.serviceTime,
@@ -666,7 +668,7 @@ function createEventLogCsv(result: ExportBase): string {
         entry.elementName ?? elementId,
         formatSimulationDateTime(result, start.time),
         formatSimulationDateTime(result, entry.time),
-        entry.resourceId ?? '',
+        entry.resourceInstanceId ?? entry.resourceId ?? '',
         variablesJson(entry.variables ?? caseOutputs.get(caseId))
       ].map(csvCell).join(CSV_DELIMITER));
       continue;
