@@ -59,7 +59,7 @@
       <semantic:extensionElements>
         <sim:taskConfig enabled="true">
           <sim:duration type="fixed" mean="1" />
-          <sim:resource id="DeliveryBoy" />
+          <sim:resource id="DeliveryBoy" sameInstanceAsBefore="true" />
         </sim:taskConfig>
       </semantic:extensionElements>
       <semantic:incoming>Flow_0qzelph</semantic:incoming>
@@ -148,7 +148,7 @@
       <semantic:extensionElements>
         <sim:taskConfig enabled="true">
           <sim:duration type="fixed" mean="1" />
-          <sim:resource id="Customer" />
+          <sim:resource id="Customer" sameInstanceAsBefore="true" />
         </sim:taskConfig>
       </semantic:extensionElements>
       <semantic:incoming>_6-428</semantic:incoming>
@@ -157,7 +157,7 @@
     <semantic:task id="_6-355" name="Eat the pizza">
       <semantic:extensionElements>
         <sim:taskConfig enabled="true">
-          <sim:resource id="Customer" />
+          <sim:resource id="Customer" sameInstanceAsBefore="true" />
         </sim:taskConfig>
       </semantic:extensionElements>
       <semantic:incoming>Flow_1lr509j</semantic:incoming>
@@ -184,7 +184,7 @@
       <semantic:extensionElements>
         <sim:taskConfig enabled="true">
           <sim:duration type="fixed" mean="1" />
-          <sim:resource id="Customer" />
+          <sim:resource id="Customer" sameInstanceAsBefore="true" />
         </sim:taskConfig>
       </semantic:extensionElements>
       <semantic:incoming>_6-426</semantic:incoming>
@@ -204,7 +204,7 @@
       <semantic:extensionElements>
         <sim:taskConfig enabled="true">
           <sim:duration type="fixed" mean="2" />
-          <sim:resource id="Customer" />
+          <sim:resource id="Customer" sameInstanceAsBefore="true" />
         </sim:taskConfig>
       </semantic:extensionElements>
       <semantic:incoming>_6-178</semantic:incoming>
